@@ -328,7 +328,6 @@ test('a failed AGENTS model call keeps its folder work for the next pass', async
 
 test('AGENTS review falls back to another contributor when its Bot is deleted', async t => {
   const folder = projectFolder(t)
-  const folderPath = realpathSync(folder)
   const seed = JSON.parse(JSON.stringify(TEAM))
   seed.bots.b2.workDir = folder
   seed.bots.b3 = { id: 'b3', sessionId: 'b3', name: 'Coder', role: 'Coding', model: 'deepseek/v4', instructions: '', capabilities: [], workDir: folder, createdAt: 3 }
@@ -338,6 +337,7 @@ test('AGENTS review falls back to another contributor when its Bot is deleted', 
     config: { learningTimes: { tickMs: 100_000 } },
   })
   t.after(() => runtime.stop())
+  const folderPath = await runtime.rt.real(folder)
   runtime.rt.partLines = async function* (sessionId) {
     yield { seq: 11, time: 1, who: 'user', text: `User: Work from ${sessionId}` }
   }
