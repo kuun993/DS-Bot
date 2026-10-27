@@ -23,17 +23,21 @@ function ProposalCard({ proposal, initialError = '', onFailure, onResolved, acti
         setBusy(false)
       })
   }
+  const agents = proposal.kind === 'agents'
   return h('section', { className: 'bt-q bt-secret bt-learning-card', role: 'group', 'aria-labelledby': titleId, 'aria-busy': busy },
     h('div', { className: 'bt-q-head' },
       h('div', { className: 'bt-q-text' },
-        h('p', { className: 'bt-q-title', id: titleId }, t(proposal.action === 'update' ? 'Skill update' : 'New skill')),
-        h('div', { className: 'bt-q-detail' }, h('code', { className: 'bt-secret-name' }, proposal.name)))),
+        h('p', { className: 'bt-q-title', id: titleId }, t(agents ? 'AGENTS.md update' : proposal.action === 'update' ? 'Skill update' : 'New skill')),
+        h('div', { className: 'bt-q-detail' }, h('code', { className: 'bt-secret-name' }, agents ? proposal.folder : proposal.name)))),
     h('div', { className: 'bt-secret-body' },
-      h('p', { className: 'bt-learning-description' }, proposal.description),
-      proposal.why ? h('p', { className: 'bt-learning-why' }, proposal.why) : null,
-      h('details', { className: 'bt-learning-preview' },
+      agents ? proposal.edits.map((edit, index) => h('div', { className: 'bt-learning-edit', key: `${proposal.id}-${index}` },
+        edit.old ? h('pre', { className: 'bt-learning-diff bt-learning-removed' }, edit.old.split('\n').map(line => `- ${line}`).join('\n')) : null,
+        edit.text ? h('pre', { className: 'bt-learning-diff bt-learning-added' }, edit.text.split('\n').map(line => `+ ${line}`).join('\n')) : null,
+        edit.why ? h('p', { className: 'bt-learning-why' }, edit.why) : null)) : h('p', { className: 'bt-learning-description' }, proposal.description),
+      !agents && proposal.why ? h('p', { className: 'bt-learning-why' }, proposal.why) : null,
+      !agents ? h('details', { className: 'bt-learning-preview' },
         h('summary', null, t('Preview')),
-        h('pre', null, proposal.content))),
+        h('pre', null, proposal.content)) : null),
     error ? h('div', { className: 'bt-secret-error', role: 'alert' }, error) : null,
     h('div', { className: 'bt-q-foot' },
       h('button', { type: 'button', className: 'bt-q-btn', disabled: busy, onClick: () => answer(false) }, t('Decline')),
@@ -75,4 +79,8 @@ export const LEARNING_CSS = `
 .bt-learning-preview{font-size:12px;line-height:16px;color:var(--bt-ink-2)}
 .bt-learning-preview summary{width:fit-content;cursor:pointer}
 .bt-learning-preview pre{max-height:220px;overflow:auto;margin:6px 0 0;padding:8px;border:1px solid var(--bt-line);border-radius:8px;background:var(--bt-card);color:var(--bt-ink);font-family:ui-monospace,monospace;font-size:12px;line-height:16px;white-space:pre-wrap;overflow-wrap:anywhere}
+.bt-learning-edit{display:grid;gap:4px}
+.bt-learning-diff{margin:0;font-family:ui-monospace,monospace;font-size:12px;line-height:16px;white-space:pre-wrap;overflow-wrap:anywhere}
+.bt-learning-removed{color:var(--bt-ink-2);text-decoration:line-through}
+.bt-learning-added{color:var(--bt-ink)}
 `

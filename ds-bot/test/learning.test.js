@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
 import { createRuntime } from '../index.js'
-import { LEARNING, parseJson, skillProblem } from '../src/host/learning.js'
+import { agentsProblem, agentsRequest, applyEdits, LEARNING, parseJson, skillProblem } from '../src/host/learning.js'
 import { fakeContext } from './fake-ctx.js'
 
 const TEAM = {
@@ -139,6 +139,161 @@ function addNextTurn(history) {
     { event: { seq: 13, type: 'assistant/message', data: { message: { content: [{ type: 'text', text: 'The release process is checked.' }] } } } },
   )
 }
+
+function projectFolder(t, { git = true, agents = '# Project\n- Existing rule\n' } = {}) {
+  const folder = mkdtempSync(join(tmpdir(), 'ds-bot-project-'))
+  if (git) mkdirSync(join(folder, '.git'))
+  if (agents !== null) writeFileSync(join(folder, 'AGENTS.md'), agents)
+  t.after(() => rmSync(folder, { recursive: true, force: true, maxRetries: 5 }))
+  return folder
+}
+
+const agentsEdit = JSON.stringify({
+  action: 'edit',
+  edits: [{ op: 'add', after: '- Existing rule', text: '- Keep the report concise.', why: 'The user corrected the report format more than once.' }],
+})
+
+test('agentsProblem validates edit safety and whole-line matches', () => {
+  const current = '# Project\n- Existing rule\n'
+  assert.equal(agentsProblem({ action: 'none' }, current), undefined)
+  const replace = (old, text = '- New rule') => ({ action: 'edit', edits: [{ op: 'replace', old, text, why: 'Repeated correction.' }] })
+  assert.match(agentsProblem(replace('- Missing'), current), /exactly once/)
+  assert.match(agentsProblem(replace('- Existing rule'), `${current}- Existing rule\n`), /exactly once/)
+  assert.match(agentsProblem(replace('Existing rule'), current), /exactly once/)
+  assert.match(agentsProblem({ action: 'edit', edits: [{ op: 'add', after: '', text: '- Task #123 happened 2026-10-28 v2.1', why: 'Repeated correction.' }] }, current), /number, date, or version/)
+  assert.match(agentsProblem({ action: 'edit', edits: [{ op: 'add', after: '', text: '- Password is hunter2', why: 'Repeated correction.' }] }, current), /secret/)
+  assert.match(agentsProblem({ action: 'edit', edits: [{ op: 'add', after: '', text: '- Keep this rule.', why: 'The password is hunter2.' }] }, current), /secret/)
+  assert.match(agentsProblem(replace('- Existing rule'), undefined), /only add lines/)
+  assert.match(agentsProblem({ action: 'edit', edits: [{ op: 'add', after: '', text: 'x'.repeat(LEARNING.agentsEditMax + 1), why: 'Repeated correction.' }] }, current), /at most/)
+  assert.match(agentsProblem({ action: 'edit', edits: [{ op: 'replace', old: '- Existing rule', text: '- Existing rule', why: 'Repeated correction.' }] }, current), /change nothing/)
+  const long = `# ${'x'.repeat(3997)}`
+  const large = { action: 'edit', edits: [1, 2, 3].map(index => ({ op: 'add', after: '', text: `- ${index}${'y'.repeat(397)}`, why: 'Repeated correction.' })) }
+  assert.match(agentsProblem(large, long), /too large/)
+})
+
+test('applyEdits supports end and anchored add, replace, remove, and a new file', () => {
+  const current = '# Project\n- Existing rule\n'
+  assert.equal(applyEdits(current, [{ op: 'add', after: '', text: '- End rule' }]), '# Project\n- Existing rule\n- End rule\n')
+  assert.equal(applyEdits(current, [{ op: 'add', after: '# Project', text: '- Before rule' }]), '# Project\n- Before rule\n- Existing rule\n')
+  assert.equal(applyEdits(current, [{ op: 'replace', old: '- Existing rule', text: '- Updated rule' }]), '# Project\n- Updated rule\n')
+  assert.equal(applyEdits(current, [{ op: 'remove', old: '- Existing rule' }]), '# Project\n')
+  assert.equal(applyEdits(undefined, [{ op: 'add', after: '', text: '# Project\n- New rule' }]), '# Project\n- New rule\n')
+})
+
+test('agentsRequest includes only the declined edits for its folder', () => {
+  const request = agentsRequest({
+    folder: '/project', current: undefined, lines: ['User: Keep reports short.'],
+    declined: [{ kind: 'agents', folder: '/project', edits: [{ op: 'add', text: '- Keep reports short.' }] }, { kind: 'agents', folder: '/other', edits: [{ op: 'add', text: '- Other' }] }],
+  })
+  assert.match(request, /There is no AGENTS.md yet/)
+  assert.match(request, /Keep reports short/)
+  assert.doesNotMatch(request, /Other/)
+})
+
+test('a Git folder with pending work gets one AGENTS proposal and approval writes it atomically', async t => {
+  const folder = projectFolder(t)
+  const seed = JSON.parse(JSON.stringify(TEAM))
+  seed.bots.b2.workDir = folder
+  const runtime = await startRuntime({ seed, history: { b2: [...ownChat] }, replies: [noneReply, agentsEdit], config: { learningTimes: { tickMs: 100_000 } } })
+  t.after(() => runtime.stop())
+  runtime.rt.partLines = async function* () {
+    for (let seq = 30; seq > 0; seq -= 1) yield { seq, time: seq, who: 'bot', text: `Bot: ${'x'.repeat(1_200)}` }
+    yield { seq: 0, time: 0, who: 'user', text: 'User: Keep the early correction after long Bot output.' }
+  }
+  await finishTurn(runtime.ctx)
+  await runtime.rt.learningRun()
+  const proposal = (await runtime.call('state')).value.learning.b2[0]
+  assert.equal(proposal.kind, 'agents')
+  assert.equal(proposal.folder, await runtime.rt.real(folder))
+  assert.match(JSON.stringify(runtime.requests.at(-1)), /Keep the early correction after long Bot output/)
+  const answer = await runtime.call('learning-answer', { id: proposal.id, approve: true })
+  assert.equal(answer.value.applied, true)
+  assert.equal(readFileSync(join(folder, 'AGENTS.md'), 'utf8'), '# Project\n- Existing rule\n- Keep the report concise.\n')
+  assert.deepEqual(readdirSync(folder).filter(name => name.endsWith('.tmp')), [])
+})
+
+test('a Git folder without AGENTS.md can get a new file approved', async t => {
+  const folder = projectFolder(t, { agents: null })
+  const seed = JSON.parse(JSON.stringify(TEAM))
+  seed.bots.b2.workDir = folder
+  const reply = JSON.stringify({ action: 'edit', edits: [{ op: 'add', after: '', text: '# Project\n- New rule', why: 'The user corrected this repeatedly.' }] })
+  const runtime = await startRuntime({ seed, history: { b2: [...ownChat] }, replies: [noneReply, reply], config: { learningTimes: { tickMs: 100_000 } } })
+  t.after(() => runtime.stop())
+  await finishTurn(runtime.ctx)
+  await runtime.rt.learningRun()
+  const proposal = (await runtime.call('state')).value.learning.b2[0]
+  assert.equal(proposal.exists, false)
+  assert.equal((await runtime.call('learning-answer', { id: proposal.id, approve: true })).value.applied, true)
+  assert.equal(readFileSync(join(folder, 'AGENTS.md'), 'utf8'), '# Project\n- New rule\n')
+})
+
+test('a folder is reviewed once with the pending work from every Bot that used it', async t => {
+  const folder = projectFolder(t)
+  const seed = JSON.parse(JSON.stringify(TEAM))
+  seed.bots.b2.workDir = folder
+  seed.bots.b3 = { id: 'b3', sessionId: 'b3', name: 'Coder', role: 'Coding', model: 'deepseek/v4', instructions: '', capabilities: [], workDir: folder, createdAt: 3 }
+  const runtime = await startRuntime({
+    seed,
+    replies: [noneReply, noneReply, agentsEdit],
+    config: { learningTimes: { tickMs: 100_000 } },
+  })
+  t.after(() => runtime.stop())
+  runtime.rt.partLines = async function* (sessionId) {
+    yield { seq: 11, time: sessionId === 'b2' ? 1 : 2, who: 'user', text: `User: Work from ${sessionId}` }
+  }
+  await finishTurn(runtime.ctx, { id: 'b2' })
+  await finishTurn(runtime.ctx, { id: 'b3' })
+  await runtime.rt.learningRun()
+  assert.equal(runtime.requests.length, 3)
+  assert.match(JSON.stringify(runtime.requests.at(-1)), /Work from b2/)
+  assert.match(JSON.stringify(runtime.requests.at(-1)), /Work from b3/)
+  assert.equal((await runtime.call('state')).value.learning.b2.length, 1)
+})
+
+test('a changed AGENTS proposal stays open, can be declined, and is included in the next folder request', async t => {
+  const folder = projectFolder(t)
+  const seed = JSON.parse(JSON.stringify(TEAM))
+  seed.bots.b2.workDir = folder
+  const history = { b2: [...ownChat] }
+  const runtime = await startRuntime({ seed, history, replies: [noneReply, agentsEdit, noneReply, noneReply], config: { learningTimes: { tickMs: 100_000 } } })
+  t.after(() => runtime.stop())
+  await finishTurn(runtime.ctx)
+  await runtime.rt.learningRun()
+  const proposal = (await runtime.call('state')).value.learning.b2[0]
+  writeFileSync(join(folder, 'AGENTS.md'), '# Project\n- Changed by the user\n')
+  const stale = await runtime.call('learning-answer', { id: proposal.id, approve: true })
+  assert.match(JSON.stringify(stale), /AGENTS.md changed since this was proposed/)
+  assert.equal((await runtime.call('state')).value.learning.b2.length, 1)
+  assert.equal((await runtime.call('learning-answer', { id: proposal.id, approve: false })).value.applied, false)
+  addNextTurn(history)
+  await finishTurn(runtime.ctx)
+  await runtime.rt.learningRun()
+  assert.match(JSON.stringify(runtime.requests.at(-1)), /Changes the user turned down before/)
+  assert.match(JSON.stringify(runtime.requests.at(-1)), /Keep the report concise/)
+})
+
+test('folders without a project marker, DSH data folders, and agentsMd:false are not reviewed', async t => {
+  const cases = [
+    { folder: projectFolder(t, { git: false, agents: null }), config: {} },
+    { folder: projectFolder(t, { agents: `# ${'x'.repeat(16_000)}` }), config: {} },
+    { folder: undefined, config: {} },
+    { folder: projectFolder(t), config: { agentsMd: false } },
+  ]
+  for (const item of cases) {
+    const seed = JSON.parse(JSON.stringify(TEAM))
+    const options = { replies: [noneReply], config: { learningTimes: { tickMs: 100_000 }, ...item.config } }
+    const runtimeOptions = item.folder
+      ? { ...options, seed: { ...seed, bots: { ...seed.bots, b2: { ...seed.bots.b2, workDir: item.folder } } } }
+      : options
+    const runtime = await startRuntime(runtimeOptions)
+    t.after(() => runtime.stop())
+    if (!item.folder) runtime.rt.botOf('b2').workDir = runtime.home
+    await finishTurn(runtime.ctx)
+    await runtime.rt.learningRun()
+    assert.equal(runtime.requests.length, 1)
+    assert.deepEqual((await runtime.call('state')).value.learning ?? {}, {})
+  }
+})
 
 test('parseJson accepts fenced and unfenced objects and ignores garbage', () => {
   assert.deepEqual(parseJson('```json\n{"action":"none"}\n```'), { action: 'none' })

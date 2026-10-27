@@ -119,6 +119,7 @@ var ZH = {
   "Skill instructions": "技能说明",
   "New skill": "新技能",
   "Skill update": "技能更新",
+  "AGENTS.md update": "AGENTS.md 更新",
   Preview: "预览",
   Approve: "批准",
   Decline: "拒绝",
@@ -18979,6 +18980,7 @@ function ProposalCard({ proposal, initialError = "", onFailure, onResolved, acti
       setBusy(false);
     });
   };
+  const agents = proposal.kind === "agents";
   return (0, import_react46.createElement)(
     "section",
     { className: "bt-q bt-secret bt-learning-card", role: "group", "aria-labelledby": titleId, "aria-busy": busy },
@@ -18988,21 +18990,27 @@ function ProposalCard({ proposal, initialError = "", onFailure, onResolved, acti
       (0, import_react46.createElement)(
         "div",
         { className: "bt-q-text" },
-        (0, import_react46.createElement)("p", { className: "bt-q-title", id: titleId }, t(proposal.action === "update" ? "Skill update" : "New skill")),
-        (0, import_react46.createElement)("div", { className: "bt-q-detail" }, (0, import_react46.createElement)("code", { className: "bt-secret-name" }, proposal.name))
+        (0, import_react46.createElement)("p", { className: "bt-q-title", id: titleId }, t(agents ? "AGENTS.md update" : proposal.action === "update" ? "Skill update" : "New skill")),
+        (0, import_react46.createElement)("div", { className: "bt-q-detail" }, (0, import_react46.createElement)("code", { className: "bt-secret-name" }, agents ? proposal.folder : proposal.name))
       )
     ),
     (0, import_react46.createElement)(
       "div",
       { className: "bt-secret-body" },
-      (0, import_react46.createElement)("p", { className: "bt-learning-description" }, proposal.description),
-      proposal.why ? (0, import_react46.createElement)("p", { className: "bt-learning-why" }, proposal.why) : null,
-      (0, import_react46.createElement)(
+      agents ? proposal.edits.map((edit, index) => (0, import_react46.createElement)(
+        "div",
+        { className: "bt-learning-edit", key: `${proposal.id}-${index}` },
+        edit.old ? (0, import_react46.createElement)("pre", { className: "bt-learning-diff bt-learning-removed" }, edit.old.split("\n").map((line) => `- ${line}`).join("\n")) : null,
+        edit.text ? (0, import_react46.createElement)("pre", { className: "bt-learning-diff bt-learning-added" }, edit.text.split("\n").map((line) => `+ ${line}`).join("\n")) : null,
+        edit.why ? (0, import_react46.createElement)("p", { className: "bt-learning-why" }, edit.why) : null
+      )) : (0, import_react46.createElement)("p", { className: "bt-learning-description" }, proposal.description),
+      !agents && proposal.why ? (0, import_react46.createElement)("p", { className: "bt-learning-why" }, proposal.why) : null,
+      !agents ? (0, import_react46.createElement)(
         "details",
         { className: "bt-learning-preview" },
         (0, import_react46.createElement)("summary", null, t("Preview")),
         (0, import_react46.createElement)("pre", null, proposal.content)
-      )
+      ) : null
     ),
     error ? (0, import_react46.createElement)("div", { className: "bt-secret-error", role: "alert" }, error) : null,
     (0, import_react46.createElement)(
@@ -19050,6 +19058,10 @@ var LEARNING_CSS = `
 .bt-learning-preview{font-size:12px;line-height:16px;color:var(--bt-ink-2)}
 .bt-learning-preview summary{width:fit-content;cursor:pointer}
 .bt-learning-preview pre{max-height:220px;overflow:auto;margin:6px 0 0;padding:8px;border:1px solid var(--bt-line);border-radius:8px;background:var(--bt-card);color:var(--bt-ink);font-family:ui-monospace,monospace;font-size:12px;line-height:16px;white-space:pre-wrap;overflow-wrap:anywhere}
+.bt-learning-edit{display:grid;gap:4px}
+.bt-learning-diff{margin:0;font-family:ui-monospace,monospace;font-size:12px;line-height:16px;white-space:pre-wrap;overflow-wrap:anywhere}
+.bt-learning-removed{color:var(--bt-ink-2);text-decoration:line-through}
+.bt-learning-added{color:var(--bt-ink)}
 `;
 
 // src/client/right-panel.js

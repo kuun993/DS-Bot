@@ -83,6 +83,7 @@ const ZH = {
   'Skill instructions': '技能说明',
   'New skill': '新技能',
   'Skill update': '技能更新',
+  'AGENTS.md update': 'AGENTS.md 更新',
   Preview: '预览',
   Approve: '批准',
   Decline: '拒绝',
