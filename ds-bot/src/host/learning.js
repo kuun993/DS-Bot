@@ -458,7 +458,7 @@ export function install(rt) {
     if (rt.botOf(queue.botId) === undefined) queue.botId = bot.id
     queue.records ??= []
     let order = queue.records.reduce((max, item) => Math.max(max, item.order ?? 0), -1) + 1
-    for (const item of records) queue.records.push({ text: item.text, time: item.time, order: order++ })
+    for (const item of records) queue.records.push({ botId: bot.id, text: item.text, time: item.time, order: order++ })
     const max = settings.textMax + settings.userTextMax
     let size = queue.records.reduce((sum, item) => sum + item.text.length, 0)
     const removed = new Set()
@@ -528,10 +528,15 @@ export function install(rt) {
       }
       if (config.agentsMd !== false) {
         for (const [folder, group] of Object.entries(store.agentsPending)) {
-          const bot = rt.botOf(group.botId)
+          let bot = rt.botOf(group.botId)
           if (bot === undefined) {
-            delete store.agentsPending[folder]
-            continue
+            const contributor = group.records.find(item => rt.botOf(item.botId) !== undefined)
+            if (contributor === undefined) {
+              delete store.agentsPending[folder]
+              continue
+            }
+            group.botId = contributor.botId
+            bot = rt.botOf(group.botId)
           }
           if (Object.values(store.proposals).some(entry => entry.kind === 'agents' && entry.folder === folder)) continue
           try {

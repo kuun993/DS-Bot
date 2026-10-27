@@ -326,33 +326,66 @@ test('a failed AGENTS model call keeps its folder work for the next pass', async
   assert.ok((await runtime.call('state')).value.learning.b2.some(proposal => proposal.kind === 'agents'))
 })
 
-test('a deleted Bot queue is reassigned when new work arrives and otherwise discarded', async t => {
+test('AGENTS review falls back to another contributor when its Bot is deleted', async t => {
   const folder = projectFolder(t)
-  const orphan = projectFolder(t)
   const folderPath = realpathSync(folder)
-  const orphanPath = realpathSync(orphan)
   const seed = JSON.parse(JSON.stringify(TEAM))
   seed.bots.b2.workDir = folder
+  seed.bots.b3 = { id: 'b3', sessionId: 'b3', name: 'Coder', role: 'Coding', model: 'deepseek/v4', instructions: '', capabilities: [], workDir: folder, createdAt: 3 }
+  const runtime = await startRuntime({
+    seed,
+    replies: [noneReply, new Error('retry this folder later'), noneReply, new Error('retry after Bot C adds work'), agentsEdit],
+    config: { learningTimes: { tickMs: 100_000 } },
+  })
+  t.after(() => runtime.stop())
+  runtime.rt.partLines = async function* (sessionId) {
+    yield { seq: 11, time: 1, who: 'user', text: `User: Work from ${sessionId}` }
+  }
+  await finishTurn(runtime.ctx, { id: 'b2' })
+  await runtime.rt.learningRun()
+  assert.equal(runtime.learningState().agentsPending[folderPath].botId, 'b2')
+  assert.deepEqual(runtime.learningState().agentsPending[folderPath].records.map(item => item.botId), ['b2'])
+
+  await finishTurn(runtime.ctx, { id: 'b3' })
+  await runtime.rt.learningRun()
+  assert.equal(runtime.learningState().agentsPending[folderPath].botId, 'b2')
+  assert.deepEqual(runtime.learningState().agentsPending[folderPath].records.map(item => item.botId), ['b2', 'b3'])
+
+  await runtime.call('delete-bot', { id: 'b2' })
+  await runtime.rt.learningRun()
+  assert.equal(runtime.learningState().agentsPending[folderPath], undefined)
+  const view = (await runtime.call('state')).value.learning
+  assert.ok(view.b3.some(proposal => proposal.kind === 'agents'))
+  assert.match(runtime.requests.at(-1).messages[0].content[0].text, /Work from b2/)
+  assert.match(runtime.requests.at(-1).messages[0].content[0].text, /Work from b3/)
+})
+
+test('AGENTS folder queue is removed when all contributing Bots are deleted', async t => {
+  const folder = projectFolder(t)
+  const folderPath = realpathSync(folder)
+  const seed = JSON.parse(JSON.stringify(TEAM))
+  seed.bots.b3 = { id: 'b3', sessionId: 'b3', name: 'Coder', role: 'Coding', model: 'deepseek/v4', instructions: '', capabilities: [], workDir: folder, createdAt: 3 }
   const runtime = await startRuntime({
     seed,
     learningSeed: {
       agentsPending: {
-        [folderPath]: { botId: 'deleted-bot', records: [{ text: 'User: Previously queued work', time: 1, order: 0 }] },
-        [orphanPath]: { botId: 'also-deleted', records: [{ text: 'User: Orphaned work', time: 1, order: 0 }] },
+        [folderPath]: {
+          botId: 'b2',
+          records: [
+            { botId: 'b2', text: 'User: Work from b2', time: 1, order: 0 },
+            { botId: 'b3', text: 'User: Work from b3', time: 2, order: 1 },
+          ],
+        },
       },
     },
-    replies: [noneReply, new Error('retry this folder later'), agentsEdit],
     config: { learningTimes: { tickMs: 100_000 } },
   })
   t.after(() => runtime.stop())
-  await finishTurn(runtime.ctx)
-  await runtime.rt.learningRun()
-  assert.equal(runtime.learningState().agentsPending[folderPath].botId, 'b2')
-  assert.equal(runtime.learningState().agentsPending[orphanPath], undefined)
-
+  await runtime.call('delete-bot', { id: 'b2' })
+  await runtime.call('delete-bot', { id: 'b3' })
   await runtime.rt.learningRun()
   assert.equal(runtime.learningState().agentsPending[folderPath], undefined)
-  assert.ok((await runtime.call('state')).value.learning.b2.some(proposal => proposal.kind === 'agents'))
+  assert.equal(runtime.requests.length, 0)
 })
 
 test('agentsMd false keeps folder queues and does not schedule a review', async t => {
