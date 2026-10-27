@@ -126,12 +126,7 @@ export function agentsSystem() {
   ].join('\n')
 }
 
-// Request text (user message): sections in this order:
-// "Project folder: <path>"
-// "Current AGENTS.md:" + fenced current file, or "There is no AGENTS.md yet."
-// "Changes the user turned down before; do not propose them again:" + one line per declined edit (op + text/old, clipped 200)   [omit if none]
-// "The user writes in <language>."  [when known, as skillRequest does]
-// "The work, oldest first:" + the lines
+// The folder, its AGENTS.md, declined edits, and work.
 export function agentsRequest({ folder, current, lines, declined = [], language }) {
   const parts = [`Project folder: ${folder}`]
   parts.push(current === undefined ? 'There is no AGENTS.md yet.' : `Current AGENTS.md:\n\`\`\`md\n${current}\n\`\`\``)
@@ -479,15 +474,19 @@ export function install(rt) {
           }
           if (config.agentsMd !== false) {
             for (const entry of read) {
-              const agent = await rt.resolveAgent(entry.sessionId)
-              const reported = rt.sessionFolder(agent.session)
-              if (!reported) continue
-              const folder = await rt.real(reported)
-              try { await rt.workFolder(folder) } catch { continue }
-              if (!await exists(join(folder, '.git')) && !await exists(join(folder, 'AGENTS.md'))) continue
-              const group = folders.get(folder) ?? { bot, records: [] }
-              for (const item of entry.work ?? []) group.records.push({ ...item, order: group.records.length })
-              folders.set(folder, group)
+              try {
+                const agent = await rt.resolveAgent(entry.sessionId)
+                const reported = rt.sessionFolder(agent.session)
+                if (!reported) continue
+                const folder = await rt.real(reported)
+                try { await rt.workFolder(folder) } catch { continue }
+                if (!await exists(join(folder, '.git')) && !await exists(join(folder, 'AGENTS.md'))) continue
+                const group = folders.get(folder) ?? { bot, records: [] }
+                for (const item of entry.work ?? []) group.records.push({ ...item, order: group.records.length })
+                folders.set(folder, group)
+              } catch (error) {
+                rt.warn('ds-bot: the AGENTS.md folder lookup for %s failed: %s', entry.sessionId, error?.message ?? error)
+              }
             }
           }
           for (const entry of read) if (entry.through !== undefined) store.cursors[entry.sessionId] = entry.through

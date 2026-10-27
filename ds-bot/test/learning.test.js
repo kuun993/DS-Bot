@@ -351,6 +351,26 @@ test('a none reply makes no proposal and advances the chat cursor', async t => {
   assert.deepEqual((await runtime.call('state')).value.learning ?? {}, {})
 })
 
+test('a folder lookup failure does not repeat the skill proposal', async t => {
+  const runtime = await startRuntime({ config: { learningTimes: { tickMs: 100_000 } } })
+  t.after(() => runtime.stop())
+  await finishTurn(runtime.ctx)
+  await until(() => runtime.learningState().pending?.b2?.includes('b2'))
+  runtime.rt.partLines = async function* () {
+    yield { seq: 10, time: 1, who: 'user', text: 'User: Please review this work' }
+    yield { seq: 11, time: 2, who: 'assistant', text: 'Bot: I finished the work.' }
+  }
+  runtime.rt.botShot = async () => createReply
+  runtime.rt.resolveAgent = async () => { throw new Error('folder lookup failed') }
+
+  await runtime.rt.learningRun()
+
+  assert.equal(Object.keys(runtime.learningState().proposals ?? {}).length, 1)
+  assert.equal(runtime.learningState().pending?.b2, undefined)
+  await runtime.rt.learningRun()
+  assert.equal(Object.keys(runtime.learningState().proposals ?? {}).length, 1)
+})
+
 test('approval ownership survives a normal skill edit and remains learned on review', async t => {
   const history = { b2: [...ownChat] }
   const updateReply = JSON.stringify({
