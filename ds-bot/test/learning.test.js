@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
@@ -324,6 +324,53 @@ test('a failed AGENTS model call keeps its folder work for the next pass', async
   assert.equal(runtime.requests.at(-1).messages[0].content[0].text, firstRequest)
   assert.equal(runtime.learningState().agentsPending[folderKey], undefined)
   assert.ok((await runtime.call('state')).value.learning.b2.some(proposal => proposal.kind === 'agents'))
+})
+
+test('a deleted Bot queue is reassigned when new work arrives and otherwise discarded', async t => {
+  const folder = projectFolder(t)
+  const orphan = projectFolder(t)
+  const folderPath = realpathSync(folder)
+  const orphanPath = realpathSync(orphan)
+  const seed = JSON.parse(JSON.stringify(TEAM))
+  seed.bots.b2.workDir = folder
+  const runtime = await startRuntime({
+    seed,
+    learningSeed: {
+      agentsPending: {
+        [folderPath]: { botId: 'deleted-bot', records: [{ text: 'User: Previously queued work', time: 1, order: 0 }] },
+        [orphanPath]: { botId: 'also-deleted', records: [{ text: 'User: Orphaned work', time: 1, order: 0 }] },
+      },
+    },
+    replies: [noneReply, new Error('retry this folder later'), agentsEdit],
+    config: { learningTimes: { tickMs: 100_000 } },
+  })
+  t.after(() => runtime.stop())
+  await finishTurn(runtime.ctx)
+  await runtime.rt.learningRun()
+  assert.equal(runtime.learningState().agentsPending[folderPath].botId, 'b2')
+  assert.equal(runtime.learningState().agentsPending[orphanPath], undefined)
+
+  await runtime.rt.learningRun()
+  assert.equal(runtime.learningState().agentsPending[folderPath], undefined)
+  assert.ok((await runtime.call('state')).value.learning.b2.some(proposal => proposal.kind === 'agents'))
+})
+
+test('agentsMd false keeps folder queues and does not schedule a review', async t => {
+  const folder = projectFolder(t)
+  const folderPath = realpathSync(folder)
+  const runtime = await startRuntime({
+    learningSeed: {
+      agentsPending: {
+        [folderPath]: { botId: 'b2', records: [{ text: 'User: Keep this queued', time: 1, order: 0 }] },
+      },
+    },
+    config: { agentsMd: false, learningTimes: { idleMs: 0, intervalMs: 0, tickMs: 10 } },
+  })
+  t.after(() => runtime.stop())
+  await new Promise(resolve => setTimeout(resolve, 60))
+  assert.equal(runtime.learningState().lastRun, undefined)
+  assert.deepEqual(runtime.learningState().agentsPending[folderPath].records, [{ text: 'User: Keep this queued', time: 1, order: 0 }])
+  assert.equal(runtime.requests.length, 0)
 })
 
 test('a changed AGENTS proposal stays open, can be declined, and is included in the next folder request', async t => {

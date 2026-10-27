@@ -455,6 +455,7 @@ export function install(rt) {
   function queueAgentsWork(folder, bot, records) {
     if (records.length === 0) return
     const queue = data().agentsPending[folder] ??= { botId: bot.id, records: [] }
+    if (rt.botOf(queue.botId) === undefined) queue.botId = bot.id
     queue.records ??= []
     let order = queue.records.reduce((max, item) => Math.max(max, item.order ?? 0), -1) + 1
     for (const item of records) queue.records.push({ text: item.text, time: item.time, order: order++ })
@@ -525,38 +526,43 @@ export function install(rt) {
           continue
         }
       }
-      for (const [folder, group] of Object.entries(store.agentsPending)) {
-        if (Object.values(store.proposals).some(entry => entry.kind === 'agents' && entry.folder === folder)) continue
-        const bot = rt.botOf(group.botId)
-        if (bot === undefined) continue
-        try {
-          const current = await agentsFile(folder)
-          if (current === undefined && await exists(join(folder, 'AGENTS.md'))) continue
-          const lines = []
-          let used = 0
-          let userUsed = 0
-          let overBudget = false
-          for (const item of [...group.records].sort((a, b) => (a.time ?? 0) - (b.time ?? 0) || a.order - b.order)) {
-            if (!overBudget && used + item.text.length <= settings.textMax) {
-              lines.push(item.text)
-              used += item.text.length
-              continue
-            }
-            overBudget = true
-            if (item.text.startsWith('User: ') && userUsed + item.text.length <= settings.userTextMax) {
-              lines.push(item.text)
-              userUsed += item.text.length
-            }
+      if (config.agentsMd !== false) {
+        for (const [folder, group] of Object.entries(store.agentsPending)) {
+          const bot = rt.botOf(group.botId)
+          if (bot === undefined) {
+            delete store.agentsPending[folder]
+            continue
           }
-          if (lines.length === 0) continue
-          const proposal = await reviewAgents(bot, folder, current, lines)
-          if (proposal !== undefined) {
-            store.proposals[proposal.id] = proposal
-            made += 1
+          if (Object.values(store.proposals).some(entry => entry.kind === 'agents' && entry.folder === folder)) continue
+          try {
+            const current = await agentsFile(folder)
+            if (current === undefined && await exists(join(folder, 'AGENTS.md'))) continue
+            const lines = []
+            let used = 0
+            let userUsed = 0
+            let overBudget = false
+            for (const item of [...group.records].sort((a, b) => (a.time ?? 0) - (b.time ?? 0) || a.order - b.order)) {
+              if (!overBudget && used + item.text.length <= settings.textMax) {
+                lines.push(item.text)
+                used += item.text.length
+                continue
+              }
+              overBudget = true
+              if (item.text.startsWith('User: ') && userUsed + item.text.length <= settings.userTextMax) {
+                lines.push(item.text)
+                userUsed += item.text.length
+              }
+            }
+            if (lines.length === 0) continue
+            const proposal = await reviewAgents(bot, folder, current, lines)
+            if (proposal !== undefined) {
+              store.proposals[proposal.id] = proposal
+              made += 1
+            }
+            delete store.agentsPending[folder]
+          } catch (error) {
+            rt.warn('ds-bot: the AGENTS.md review of %s failed: %s', folder, error?.message ?? error)
           }
-          delete store.agentsPending[folder]
-        } catch (error) {
-          rt.warn('ds-bot: the AGENTS.md review of %s failed: %s', folder, error?.message ?? error)
         }
       }
       await persist()
@@ -568,7 +574,7 @@ export function install(rt) {
   const due = () => {
     const store = data()
     const hasPending = Object.values(store.pending).some(sessions => sessions.length > 0)
-      || Object.values(store.agentsPending).some(queue => queue.records?.length > 0)
+      || (config.agentsMd !== false && Object.values(store.agentsPending).some(queue => queue.records?.length > 0))
     if (!hasPending || rt.readOnly() !== undefined) return false
     if (Object.keys(rt.workView()).length > 0 || Date.now() - lastActivity < settings.idleMs) return false
     return store.lastRun === undefined || Date.now() - store.lastRun >= settings.intervalMs
