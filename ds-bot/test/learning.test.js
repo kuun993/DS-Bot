@@ -212,6 +212,24 @@ test('a Git folder with pending work gets one AGENTS proposal and approval write
   assert.deepEqual(readdirSync(folder).filter(name => name.endsWith('.tmp')), [])
 })
 
+test('a failed work-folder check keeps an AGENTS proposal open', async t => {
+  const folder = projectFolder(t)
+  const seed = JSON.parse(JSON.stringify(TEAM))
+  seed.bots.b2.workDir = folder
+  const runtime = await startRuntime({ seed, replies: [noneReply, agentsEdit], config: { learningTimes: { tickMs: 100_000 } } })
+  t.after(() => runtime.stop())
+  await finishTurn(runtime.ctx)
+  await runtime.rt.learningRun()
+  const proposal = (await runtime.call('state')).value.learning.b2[0]
+  const workFolder = runtime.rt.workFolder
+  runtime.rt.workFolder = async () => { throw new Error('folder is no longer available') }
+  const failed = await runtime.call('learning-answer', { id: proposal.id, approve: true })
+  assert.equal(failed.ok, false)
+  assert.equal((await runtime.call('state')).value.learning.b2.length, 1)
+  runtime.rt.workFolder = workFolder
+  assert.equal((await runtime.call('learning-answer', { id: proposal.id, approve: true })).value.applied, true)
+})
+
 test('a Git folder without AGENTS.md can get a new file approved', async t => {
   const folder = projectFolder(t, { agents: null })
   const seed = JSON.parse(JSON.stringify(TEAM))
@@ -248,6 +266,64 @@ test('a folder is reviewed once with the pending work from every Bot that used i
   assert.match(JSON.stringify(runtime.requests.at(-1)), /Work from b2/)
   assert.match(JSON.stringify(runtime.requests.at(-1)), /Work from b3/)
   assert.equal((await runtime.call('state')).value.learning.b2.length, 1)
+})
+
+test('work for a folder with an open proposal stays queued until the card is declined', async t => {
+  const folder = projectFolder(t)
+  const seed = JSON.parse(JSON.stringify(TEAM))
+  seed.bots.b2.workDir = folder
+  seed.bots.b3 = { id: 'b3', sessionId: 'b3', name: 'Coder', role: 'Coding', model: 'deepseek/v4', instructions: '', capabilities: [], workDir: folder, createdAt: 3 }
+  const runtime = await startRuntime({
+    seed,
+    replies: [noneReply, agentsEdit, noneReply, agentsEdit],
+    config: { learningTimes: { tickMs: 100_000 } },
+  })
+  t.after(() => runtime.stop())
+  runtime.rt.partLines = async function* (sessionId) {
+    yield { seq: 11, time: 1, who: 'user', text: `User: Work from ${sessionId}` }
+  }
+  await finishTurn(runtime.ctx, { id: 'b2' })
+  await runtime.rt.learningRun()
+  const proposal = (await runtime.call('state')).value.learning.b2[0]
+
+  await finishTurn(runtime.ctx, { id: 'b3' })
+  await runtime.rt.learningRun()
+  const queued = runtime.learningState().agentsPending[await runtime.rt.real(folder)]
+  assert.match(queued.records.map(item => item.text).join('\n'), /Work from b3/)
+  assert.equal(runtime.requests.length, 3)
+  assert.equal((await runtime.call('state')).value.learning.b2.length, 1)
+
+  await runtime.call('learning-answer', { id: proposal.id, approve: false })
+  await runtime.rt.learningRun()
+  assert.match(runtime.requests.at(-1).messages[0].content[0].text, /Work from b3/)
+  assert.equal(runtime.learningState().agentsPending[await runtime.rt.real(folder)], undefined)
+})
+
+test('a failed AGENTS model call keeps its folder work for the next pass', async t => {
+  const folder = projectFolder(t)
+  const seed = JSON.parse(JSON.stringify(TEAM))
+  seed.bots.b2.workDir = folder
+  const runtime = await startRuntime({
+    seed,
+    replies: [createReply, new Error('AGENTS model failed'), agentsEdit],
+    config: { learningTimes: { tickMs: 100_000 } },
+  })
+  t.after(() => runtime.stop())
+  runtime.rt.partLines = async function* () {
+    yield { seq: 11, time: 1, who: 'user', text: 'User: Keep the same folder work' }
+  }
+  await finishTurn(runtime.ctx)
+  await runtime.rt.learningRun()
+  const folderKey = await runtime.rt.real(folder)
+  assert.match(runtime.learningState().agentsPending[folderKey].records[0].text, /same folder work/)
+  assert.equal((await runtime.call('state')).value.learning.b2[0].kind, 'skill')
+  const firstRequest = runtime.requests.at(-1).messages[0].content[0].text
+
+  await runtime.rt.learningRun()
+  assert.match(runtime.requests.at(-1).messages[0].content[0].text, /same folder work/)
+  assert.equal(runtime.requests.at(-1).messages[0].content[0].text, firstRequest)
+  assert.equal(runtime.learningState().agentsPending[folderKey], undefined)
+  assert.ok((await runtime.call('state')).value.learning.b2.some(proposal => proposal.kind === 'agents'))
 })
 
 test('a changed AGENTS proposal stays open, can be declined, and is included in the next folder request', async t => {
@@ -634,6 +710,24 @@ test('a saved secret in a proposed skill is not shown as a proposal', async t =>
   await finishTurn(runtime.ctx)
   await until(() => runtime.learningState().cursors?.b2 === 11)
   assert.deepEqual(runtime.learningState().proposals, {})
+})
+
+test('an AGENTS edit containing a saved secret is not shown as a proposal', async t => {
+  const folder = projectFolder(t)
+  const seed = JSON.parse(JSON.stringify(TEAM))
+  seed.bots.b2.workDir = folder
+  const secretValue = 'agents-saved-secret-42'
+  const reply = JSON.stringify({
+    action: 'edit',
+    edits: [{ op: 'add', after: '- Existing rule', text: `- Use ${secretValue}.`, why: 'The user corrected this repeatedly.' }],
+  })
+  const runtime = await startRuntime({ seed, replies: [noneReply, reply], config: { learningTimes: { tickMs: 100_000 } } })
+  t.after(() => runtime.stop())
+  await runtime.call('secret-set', { name: 'AGENTS_TEST', value: secretValue })
+  await finishTurn(runtime.ctx)
+  await runtime.rt.learningRun()
+  assert.equal(Object.values(runtime.learningState().proposals ?? {}).length, 0)
+  assert.equal(Object.keys(runtime.learningState().agentsPending ?? {}).length, 0)
 })
 
 test('user corrections remain in long chat reviews after the text budget', async t => {

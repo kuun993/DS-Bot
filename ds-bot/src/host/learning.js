@@ -273,9 +273,9 @@ export function install(rt) {
 
   const root = join(home, 'learning')
   const path = join(root, 'state.json')
-  // `pending`: Bot id → the chat Sessions with a long turn since the last pass.
-  // `cursors`: Session id → the newest line a pass has read. `proposals`: waiting
-  // for the user, by id. `learned`: skill names learned by each Bot.
+  // `pending`: Bot id → chats with a long turn since the last pass. `agentsPending`:
+  // folder → queued work waiting for AGENTS.md review. `cursors`: newest line read.
+  // `proposals`: waiting for the user, by id. `learned`: skill names learned by Bot.
   let saved
   const data = () => {
     if (saved !== undefined) return saved
@@ -290,6 +290,7 @@ export function install(rt) {
     saved.proposals ??= {}
     saved.declined ??= []
     saved.learned ??= {}
+    saved.agentsPending ??= {}
     return saved
   }
   let writing = Promise.resolve()
@@ -411,6 +412,11 @@ export function install(rt) {
     const request = agentsRequest({ folder, current, lines, declined: data().declined, language })
     const reply = await rt.botShot(bot, agentsSystem(), request, { sessionId: rt.chatOf(bot.id), kind: 'memory' })
     const answer = parseJson(reply)
+    if (answer === undefined || answer === null || typeof answer !== 'object') throw new Error('the answer is not a JSON object')
+    if (Array.isArray(answer.edits) && answer.edits.some(edit => [edit?.text, edit?.why].some(value => typeof value === 'string' && rt.redactSecrets(value) !== value))) {
+      rt.warn('ds-bot: the AGENTS.md review of %s proposed content containing a saved secret', bot.name)
+      return undefined
+    }
     const problem = agentsProblem(answer, current)
     if (problem !== undefined) {
       if (answer?.action !== 'none') rt.warn('ds-bot: the AGENTS.md review of %s proposed nothing usable: %s', bot.name, problem)
@@ -446,6 +452,32 @@ export function install(rt) {
     }
   }
 
+  function queueAgentsWork(folder, bot, records) {
+    if (records.length === 0) return
+    const queue = data().agentsPending[folder] ??= { botId: bot.id, records: [] }
+    queue.records ??= []
+    let order = queue.records.reduce((max, item) => Math.max(max, item.order ?? 0), -1) + 1
+    for (const item of records) queue.records.push({ text: item.text, time: item.time, order: order++ })
+    const max = settings.textMax + settings.userTextMax
+    let size = queue.records.reduce((sum, item) => sum + item.text.length, 0)
+    const removed = new Set()
+    const oldest = [...queue.records].sort((a, b) => (a.time ?? 0) - (b.time ?? 0) || a.order - b.order)
+    for (const item of oldest) {
+      if (size <= max) break
+      if (item.text.startsWith('User: ')) continue
+      removed.add(item)
+      size -= item.text.length
+    }
+    for (const item of oldest) {
+      if (size <= max) break
+      if (!item.text.startsWith('User: ')) continue
+      removed.add(item)
+      size -= item.text.length
+    }
+    if (removed.size > 0) queue.records = queue.records.filter(item => !removed.has(item))
+    if (queue.records.length === 0) delete data().agentsPending[folder]
+  }
+
   // One pass over every Bot with a long turn since the last one. A Bot with a
   // proposal still waiting is skipped: its chat is read again in the next pass.
   let running
@@ -455,7 +487,6 @@ export function install(rt) {
       const store = data()
       store.lastRun = Date.now()
       let made = 0
-      const folders = new Map()
       for (const [botId, sessions] of Object.entries(store.pending)) {
         const bot = rt.botOf(botId)
         if (bot === undefined) {
@@ -481,9 +512,7 @@ export function install(rt) {
                 const folder = await rt.real(reported)
                 try { await rt.workFolder(folder) } catch { continue }
                 if (!await exists(join(folder, '.git')) && !await exists(join(folder, 'AGENTS.md'))) continue
-                const group = folders.get(folder) ?? { bot, records: [] }
-                for (const item of entry.work ?? []) group.records.push({ ...item, order: group.records.length })
-                folders.set(folder, group)
+                queueAgentsWork(folder, bot, entry.work ?? [])
               } catch (error) {
                 rt.warn('ds-bot: the AGENTS.md folder lookup for %s failed: %s', entry.sessionId, error?.message ?? error)
               }
@@ -496,8 +525,10 @@ export function install(rt) {
           continue
         }
       }
-      for (const [folder, group] of folders) {
+      for (const [folder, group] of Object.entries(store.agentsPending)) {
         if (Object.values(store.proposals).some(entry => entry.kind === 'agents' && entry.folder === folder)) continue
+        const bot = rt.botOf(group.botId)
+        if (bot === undefined) continue
         try {
           const current = await agentsFile(folder)
           if (current === undefined && await exists(join(folder, 'AGENTS.md'))) continue
@@ -505,7 +536,7 @@ export function install(rt) {
           let used = 0
           let userUsed = 0
           let overBudget = false
-          for (const item of group.records.sort((a, b) => (a.time ?? 0) - (b.time ?? 0) || a.order - b.order)) {
+          for (const item of [...group.records].sort((a, b) => (a.time ?? 0) - (b.time ?? 0) || a.order - b.order)) {
             if (!overBudget && used + item.text.length <= settings.textMax) {
               lines.push(item.text)
               used += item.text.length
@@ -518,11 +549,12 @@ export function install(rt) {
             }
           }
           if (lines.length === 0) continue
-          const proposal = await reviewAgents(group.bot, folder, current, lines)
+          const proposal = await reviewAgents(bot, folder, current, lines)
           if (proposal !== undefined) {
             store.proposals[proposal.id] = proposal
             made += 1
           }
+          delete store.agentsPending[folder]
         } catch (error) {
           rt.warn('ds-bot: the AGENTS.md review of %s failed: %s', folder, error?.message ?? error)
         }
@@ -535,7 +567,9 @@ export function install(rt) {
 
   const due = () => {
     const store = data()
-    if (Object.keys(store.pending).length === 0 || rt.readOnly() !== undefined) return false
+    const hasPending = Object.values(store.pending).some(sessions => sessions.length > 0)
+      || Object.values(store.agentsPending).some(queue => queue.records?.length > 0)
+    if (!hasPending || rt.readOnly() !== undefined) return false
     if (Object.keys(rt.workView()).length > 0 || Date.now() - lastActivity < settings.idleMs) return false
     return store.lastRun === undefined || Date.now() - store.lastRun >= settings.intervalMs
   }
@@ -569,21 +603,43 @@ export function install(rt) {
     return { applied: true }
   }
 
+  const agentsApplying = new Map()
   async function applyAgents(proposal) {
-    let current
-    try { current = await readFile(proposal.path, 'utf8') } catch (error) {
-      if (error?.code !== 'ENOENT') throw error
-    }
-    const existsNow = current !== undefined
-    if (existsNow !== proposal.exists || hashOf(current ?? '') !== proposal.base) {
-      throw new Error('AGENTS.md changed since this was proposed')
-    }
-    const temp = `${proposal.path}.${process.pid}.${randomUUID()}.tmp`
+    const path = proposal.path
+    const previous = agentsApplying.get(path) ?? Promise.resolve()
+    let release
+    const lock = new Promise(resolve => { release = resolve })
+    const queued = previous.catch(() => {}).then(() => lock)
+    agentsApplying.set(path, queued)
+    await previous.catch(() => {})
     try {
-      await writeFile(temp, proposal.content, 'utf8')
-      await replaceFile(temp, proposal.path)
+      const folder = await rt.real(proposal.folder)
+      await rt.workFolder(folder)
+      if (join(folder, 'AGENTS.md') !== path) throw new Error('AGENTS.md changed since this was proposed')
+      const readCurrent = async () => {
+        try { return await readFile(path, 'utf8') } catch (error) {
+          if (error?.code !== 'ENOENT') throw error
+          return undefined
+        }
+      }
+      const checkCurrent = current => {
+        const existsNow = current !== undefined
+        if (existsNow !== proposal.exists || hashOf(current ?? '') !== proposal.base) {
+          throw new Error('AGENTS.md changed since this was proposed')
+        }
+      }
+      checkCurrent(await readCurrent())
+      const temp = `${path}.${process.pid}.${randomUUID()}.tmp`
+      try {
+        await writeFile(temp, proposal.content, 'utf8')
+        checkCurrent(await readCurrent())
+        await replaceFile(temp, path)
+      } finally {
+        await unlink(temp).catch(() => {})
+      }
     } finally {
-      await unlink(temp).catch(() => {})
+      release()
+      if (agentsApplying.get(path) === queued) agentsApplying.delete(path)
     }
   }
 
