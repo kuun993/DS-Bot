@@ -18959,6 +18959,21 @@ function serveBrowserReads({ browsers, post, clientId = globalThis.crypto.random
   };
 }
 
+// src/client/learning-card-model.js
+function proposalTurn(proposal, turns) {
+  if (!Number.isFinite(proposal?.at) || typeof turns?.values !== "function") return void 0;
+  let latest;
+  let before;
+  for (const location2 of turns.values()) {
+    const end = location2?.end?.time;
+    if (location2?.status !== "closed" || !Number.isFinite(end)) continue;
+    const later = (target) => target === void 0 || end > target.end.time || end === target.end.time && location2.turn > target.turn;
+    if (later(latest)) latest = location2;
+    if (end <= proposal.at && later(before)) before = location2;
+  }
+  return (before ?? latest)?.turn;
+}
+
 // src/client/learning-card.js
 var import_react46 = require("react");
 function ProposalCard({ proposal, initialError = "", onFailure, onResolved, actions }) {
@@ -18983,7 +18998,7 @@ function ProposalCard({ proposal, initialError = "", onFailure, onResolved, acti
   const agents = proposal.kind === "agents";
   return (0, import_react46.createElement)(
     "section",
-    { className: "bt-q bt-secret bt-learning-card", role: "group", "aria-labelledby": titleId, "aria-busy": busy },
+    { className: "bt-q bt-learning-card", role: "group", "aria-labelledby": titleId, "aria-busy": busy },
     (0, import_react46.createElement)(
       "div",
       { className: "bt-q-head" },
@@ -18991,12 +19006,12 @@ function ProposalCard({ proposal, initialError = "", onFailure, onResolved, acti
         "div",
         { className: "bt-q-text" },
         (0, import_react46.createElement)("p", { className: "bt-q-title", id: titleId }, t(agents ? "AGENTS.md update" : proposal.action === "update" ? "Skill update" : "New skill")),
-        (0, import_react46.createElement)("div", { className: "bt-q-detail" }, (0, import_react46.createElement)("code", { className: "bt-secret-name" }, agents ? proposal.folder : proposal.name))
+        (0, import_react46.createElement)("div", { className: "bt-q-detail" }, (0, import_react46.createElement)("code", null, agents ? proposal.folder : proposal.name))
       )
     ),
     (0, import_react46.createElement)(
       "div",
-      { className: "bt-secret-body" },
+      { className: "bt-learning-body" },
       agents ? proposal.edits.map((edit, index) => (0, import_react46.createElement)(
         "div",
         { className: "bt-learning-edit", key: `${proposal.id}-${index}` },
@@ -19012,7 +19027,7 @@ function ProposalCard({ proposal, initialError = "", onFailure, onResolved, acti
         (0, import_react46.createElement)("pre", null, proposal.content)
       ) : null
     ),
-    error ? (0, import_react46.createElement)("div", { className: "bt-secret-error", role: "alert" }, error) : null,
+    error ? (0, import_react46.createElement)("div", { className: "bt-learning-error", role: "alert" }, error) : null,
     (0, import_react46.createElement)(
       "div",
       { className: "bt-q-foot" },
@@ -19021,8 +19036,9 @@ function ProposalCard({ proposal, initialError = "", onFailure, onResolved, acti
     )
   );
 }
-function LearningDock({ sessionId, useRoster, actions }) {
+function LearningTurnTail({ turn, sessionId, useRoster, actions }) {
   const roster = useRoster((value) => value);
+  const facts = useTurnFacts(sessionId, actions);
   const [failed, setFailed] = (0, import_react46.useState)({});
   const bot = roster.byId?.[sessionId];
   if (!bot || currentPart(bot) !== sessionId) return null;
@@ -19031,7 +19047,8 @@ function LearningDock({ sessionId, useRoster, actions }) {
   for (const entry of Object.values(failed)) {
     if (entry.proposal.botId === bot.id && !proposals.some((proposal) => proposal.id === entry.proposal.id)) visible.push(entry.proposal);
   }
-  if (visible.length === 0) return null;
+  const cards = visible.filter((proposal) => proposalTurn(proposal, facts?.turns) === turn?.turn);
+  if (cards.length === 0) return null;
   const onFailure = (proposal, error) => setFailed((current) => ({ ...current, [proposal.id]: { proposal, error } }));
   const onResolved = (id) => setFailed((current) => {
     if (!(id in current)) return current;
@@ -19039,20 +19056,21 @@ function LearningDock({ sessionId, useRoster, actions }) {
     delete next[id];
     return next;
   });
-  return (0, import_react46.createElement)(
+  return (0, import_react46.createElement)("div", { className: "bt-learning-stack" }, cards.map((proposal) => (0, import_react46.createElement)(
     "div",
-    { className: "bt-q-dock bt-secret-dock bt-learning-dock" },
-    visible.map((proposal) => (0, import_react46.createElement)(ProposalCard, {
-      key: proposal.id,
+    { className: "bt-q-inline", key: proposal.id },
+    (0, import_react46.createElement)(ProposalCard, {
       proposal,
       initialError: failed[proposal.id]?.error,
       onFailure,
       onResolved,
       actions
-    }))
-  );
+    })
+  )));
 }
 var LEARNING_CSS = `
+.bt-learning-stack{display:flex;flex-direction:column;align-items:flex-start;gap:4px}
+.bt-learning-body{display:flex;flex-direction:column;gap:8px}
 .bt-learning-description{margin:0;font-size:13px;line-height:18px;color:var(--bt-ink)}
 .bt-learning-why{margin:0;font-size:12px;line-height:16px;color:var(--bt-ink-2)}
 .bt-learning-preview{font-size:12px;line-height:16px;color:var(--bt-ink-2)}
@@ -19062,6 +19080,7 @@ var LEARNING_CSS = `
 .bt-learning-diff{margin:0;font-family:ui-monospace,monospace;font-size:12px;line-height:16px;white-space:pre-wrap;overflow-wrap:anywhere}
 .bt-learning-removed{color:var(--bt-ink-2);text-decoration:line-through}
 .bt-learning-added{color:var(--bt-ink)}
+.bt-learning-error{font-size:12px;line-height:16px;color:var(--bt-danger)}
 `;
 
 // src/client/right-panel.js
@@ -20075,6 +20094,7 @@ function apply(ctx) {
     // A side question is not a transcript row. After its snapshot turn closes it
     // sits on that turn's tail, ahead of the time separator.
     () => shadow("conversation.chat.turnTail", { id: "bot-btw", order: 800, priority: BOT_PRIORITY, inject: face }, BtwTurnTail),
+    () => shadow("conversation.chat.turnTail", { id: "bot-learning", order: 850, priority: BOT_PRIORITY, inject: face }, LearningTurnTail),
     // A Bot condenses its conversation without telling anyone; the chat keeps showing
     // every message.
     () => shadow("conversation.chat.node", { key: "question-reply", priority: BOT_PRIORITY, locale: "chat" }, AnsweredReply),
@@ -20102,7 +20122,6 @@ function apply(ctx) {
     () => shadow("conversation.input.dock", { id: "bot-question", order: -100, inject: face }, QuestionDock),
     () => shadow("conversation.input.dock", { id: "bot-view", order: -95, inject: face }, WidgetDock),
     () => shadow("conversation.input.dock", { id: "bot-secret", order: -90, inject: face }, SecretDock),
-    () => shadow("conversation.input.dock", { id: "bot-learning", order: -80, inject: face }, LearningDock),
     () => shadow("conversation.input.dock", { id: "bot-handoff", order: -85, inject: face }, HandoffDock)
   ];
   ctx.effect(() => installCompiledStyles(RETURN_CSS, "return"), "ds-bot: return styles");

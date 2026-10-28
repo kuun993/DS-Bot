@@ -155,6 +155,11 @@ const occurrences = (lines, block) => {
   return found
 }
 
+export function withoutReviewedAgentsRecords(records, reviewedOrders) {
+  const reviewed = new Set(reviewedOrders)
+  return records.filter(record => !reviewed.has(record.order))
+}
+
 export function applyEdits(current, edits) {
   let text = current ?? ''
   let newline = text.includes('\r\n') ? '\r\n' : '\n'
@@ -307,6 +312,7 @@ export function install(rt) {
 
   // A turn in a Bot's own chat that ran long marks the chat for the next pass.
   const started = new Map()
+  const noted = new Map()
   let lastActivity = Date.now()
   ctx.on('agent/status', ({ agent, status }) => {
     const id = agent?.id
@@ -322,6 +328,7 @@ export function install(rt) {
     if (since === undefined || botId === undefined || Date.now() - since < settings.minTurnMs) return
     const pending = data().pending
     pending[botId] = [...new Set([...(pending[botId] ?? []), id])]
+    noted.set(id, (noted.get(id) ?? 0) + 1)
     void persist()
   })
 
@@ -488,13 +495,15 @@ export function install(rt) {
       const store = data()
       store.lastRun = Date.now()
       let made = 0
-      for (const [botId, sessions] of Object.entries(store.pending)) {
+      for (const [botId, pendingSessions] of Object.entries(store.pending)) {
         const bot = rt.botOf(botId)
         if (bot === undefined) {
           delete store.pending[botId]
           continue
         }
         if (waitingFor(botId).length > 0) continue
+        const sessions = [...pendingSessions]
+        const notedAtStart = new Map(sessions.map(sessionId => [sessionId, noted.get(sessionId)]))
         try {
           const read = []
           for (const sessionId of sessions) read.push({ sessionId, ...await linesSince(sessionId) })
@@ -520,7 +529,10 @@ export function install(rt) {
             }
           }
           for (const entry of read) if (entry.through !== undefined) store.cursors[entry.sessionId] = entry.through
-          delete store.pending[botId]
+          const remaining = (store.pending[botId] ?? []).filter(sessionId =>
+            !notedAtStart.has(sessionId) || noted.get(sessionId) !== notedAtStart.get(sessionId))
+          if (remaining.length === 0) delete store.pending[botId]
+          else store.pending[botId] = remaining
         } catch (error) {
           rt.warn('ds-bot: the learning review of %s failed: %s', bot.name, error?.message ?? error)
           continue
@@ -540,13 +552,15 @@ export function install(rt) {
           }
           if (Object.values(store.proposals).some(entry => entry.kind === 'agents' && entry.folder === folder)) continue
           try {
+            const reviewRecords = [...group.records]
+            const reviewedOrders = reviewRecords.map(item => item.order)
             const current = await agentsFile(folder)
             if (current === undefined && await exists(join(folder, 'AGENTS.md'))) continue
             const lines = []
             let used = 0
             let userUsed = 0
             let overBudget = false
-            for (const item of [...group.records].sort((a, b) => (a.time ?? 0) - (b.time ?? 0) || a.order - b.order)) {
+            for (const item of reviewRecords.sort((a, b) => (a.time ?? 0) - (b.time ?? 0) || a.order - b.order)) {
               if (!overBudget && used + item.text.length <= settings.textMax) {
                 lines.push(item.text)
                 used += item.text.length
@@ -564,7 +578,11 @@ export function install(rt) {
               store.proposals[proposal.id] = proposal
               made += 1
             }
-            delete store.agentsPending[folder]
+            const queue = store.agentsPending[folder]
+            if (queue) {
+              queue.records = withoutReviewedAgentsRecords(queue.records ?? [], reviewedOrders)
+              if (queue.records.length === 0) delete store.agentsPending[folder]
+            }
           } catch (error) {
             rt.warn('ds-bot: the AGENTS.md review of %s failed: %s', folder, error?.message ?? error)
           }

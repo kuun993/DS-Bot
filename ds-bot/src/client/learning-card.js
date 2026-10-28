@@ -1,4 +1,6 @@
 import { createElement as h, useId, useRef, useState } from 'react'
+import { useTurnFacts } from './btw.js'
+import { proposalTurn } from './learning-card-model.js'
 import { currentPart } from './text.js'
 import { t } from './i18n.js'
 
@@ -24,12 +26,12 @@ function ProposalCard({ proposal, initialError = '', onFailure, onResolved, acti
       })
   }
   const agents = proposal.kind === 'agents'
-  return h('section', { className: 'bt-q bt-secret bt-learning-card', role: 'group', 'aria-labelledby': titleId, 'aria-busy': busy },
+  return h('section', { className: 'bt-q bt-learning-card', role: 'group', 'aria-labelledby': titleId, 'aria-busy': busy },
     h('div', { className: 'bt-q-head' },
       h('div', { className: 'bt-q-text' },
         h('p', { className: 'bt-q-title', id: titleId }, t(agents ? 'AGENTS.md update' : proposal.action === 'update' ? 'Skill update' : 'New skill')),
-        h('div', { className: 'bt-q-detail' }, h('code', { className: 'bt-secret-name' }, agents ? proposal.folder : proposal.name)))),
-    h('div', { className: 'bt-secret-body' },
+        h('div', { className: 'bt-q-detail' }, h('code', null, agents ? proposal.folder : proposal.name)))),
+    h('div', { className: 'bt-learning-body' },
       agents ? proposal.edits.map((edit, index) => h('div', { className: 'bt-learning-edit', key: `${proposal.id}-${index}` },
         edit.old ? h('pre', { className: 'bt-learning-diff bt-learning-removed' }, edit.old.split('\n').map(line => `- ${line}`).join('\n')) : null,
         edit.text ? h('pre', { className: 'bt-learning-diff bt-learning-added' }, edit.text.split('\n').map(line => `+ ${line}`).join('\n')) : null,
@@ -38,14 +40,15 @@ function ProposalCard({ proposal, initialError = '', onFailure, onResolved, acti
       !agents ? h('details', { className: 'bt-learning-preview' },
         h('summary', null, t('Preview')),
         h('pre', null, proposal.content)) : null),
-    error ? h('div', { className: 'bt-secret-error', role: 'alert' }, error) : null,
+    error ? h('div', { className: 'bt-learning-error', role: 'alert' }, error) : null,
     h('div', { className: 'bt-q-foot' },
       h('button', { type: 'button', className: 'bt-q-btn', disabled: busy, onClick: () => answer(false) }, t('Decline')),
       h('button', { type: 'button', className: 'bt-q-submit', disabled: busy, onClick: () => answer(true) }, t('Approve'))))
 }
 
-export function LearningDock({ sessionId, useRoster, actions }) {
+export function LearningTurnTail({ turn, sessionId, useRoster, actions }) {
   const roster = useRoster(value => value)
+  const facts = useTurnFacts(sessionId, actions)
   const [failed, setFailed] = useState({})
   const bot = roster.byId?.[sessionId]
   if (!bot || currentPart(bot) !== sessionId) return null
@@ -54,7 +57,8 @@ export function LearningDock({ sessionId, useRoster, actions }) {
   for (const entry of Object.values(failed)) {
     if (entry.proposal.botId === bot.id && !proposals.some(proposal => proposal.id === entry.proposal.id)) visible.push(entry.proposal)
   }
-  if (visible.length === 0) return null
+  const cards = visible.filter(proposal => proposalTurn(proposal, facts?.turns) === turn?.turn)
+  if (cards.length === 0) return null
   const onFailure = (proposal, error) => setFailed(current => ({ ...current, [proposal.id]: { proposal, error } }))
   const onResolved = id => setFailed(current => {
     if (!(id in current)) return current
@@ -62,18 +66,19 @@ export function LearningDock({ sessionId, useRoster, actions }) {
     delete next[id]
     return next
   })
-  return h('div', { className: 'bt-q-dock bt-secret-dock bt-learning-dock' },
-    visible.map(proposal => h(ProposalCard, {
-      key: proposal.id,
+  return h('div', { className: 'bt-learning-stack' }, cards.map(proposal => h('div', { className: 'bt-q-inline', key: proposal.id },
+    h(ProposalCard, {
       proposal,
       initialError: failed[proposal.id]?.error,
       onFailure,
       onResolved,
       actions,
-    })))
+    }))))
 }
 
 export const LEARNING_CSS = `
+.bt-learning-stack{display:flex;flex-direction:column;align-items:flex-start;gap:4px}
+.bt-learning-body{display:flex;flex-direction:column;gap:8px}
 .bt-learning-description{margin:0;font-size:13px;line-height:18px;color:var(--bt-ink)}
 .bt-learning-why{margin:0;font-size:12px;line-height:16px;color:var(--bt-ink-2)}
 .bt-learning-preview{font-size:12px;line-height:16px;color:var(--bt-ink-2)}
@@ -83,4 +88,5 @@ export const LEARNING_CSS = `
 .bt-learning-diff{margin:0;font-family:ui-monospace,monospace;font-size:12px;line-height:16px;white-space:pre-wrap;overflow-wrap:anywhere}
 .bt-learning-removed{color:var(--bt-ink-2);text-decoration:line-through}
 .bt-learning-added{color:var(--bt-ink)}
+.bt-learning-error{font-size:12px;line-height:16px;color:var(--bt-danger)}
 `
