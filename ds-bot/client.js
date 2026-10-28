@@ -18960,8 +18960,8 @@ function serveBrowserReads({ browsers, post, clientId = globalThis.crypto.random
 }
 
 // src/client/learning-card-model.js
-function proposalTurn(proposal, turns) {
-  if (!Number.isFinite(proposal?.at) || typeof turns?.values !== "function") return void 0;
+function proposalPlacement(proposal, turns) {
+  if (!Number.isFinite(proposal?.at) || typeof turns?.values !== "function") return { kind: "dock" };
   let latest;
   let before;
   for (const location2 of turns.values()) {
@@ -18971,11 +18971,13 @@ function proposalTurn(proposal, turns) {
     if (later(latest)) latest = location2;
     if (end <= proposal.at && later(before)) before = location2;
   }
-  return (before ?? latest)?.turn;
+  const turn = (before ?? latest)?.turn;
+  return turn === void 0 ? { kind: "dock" } : { kind: "turn", turn };
 }
 
 // src/client/learning-card.js
 var import_react46 = require("react");
+var failedAnswers = /* @__PURE__ */ new Map();
 function ProposalCard({ proposal, initialError = "", onFailure, onResolved, actions }) {
   const [busy, setBusy] = (0, import_react46.useState)(false);
   const [error, setError] = (0, import_react46.useState)(initialError);
@@ -19036,7 +19038,7 @@ function ProposalCard({ proposal, initialError = "", onFailure, onResolved, acti
     )
   );
 }
-function LearningTurnTail({ turn, sessionId, useRoster, actions }) {
+function LearningProposals({ turn, dock, sessionId, useRoster, actions }) {
   const roster = useRoster((value) => value);
   const facts = useTurnFacts(sessionId, actions);
   const [failed, setFailed] = (0, import_react46.useState)({});
@@ -19047,10 +19049,20 @@ function LearningTurnTail({ turn, sessionId, useRoster, actions }) {
   for (const entry of Object.values(failed)) {
     if (entry.proposal.botId === bot.id && !proposals.some((proposal) => proposal.id === entry.proposal.id)) visible.push(entry.proposal);
   }
-  const cards = visible.filter((proposal) => proposalTurn(proposal, facts?.turns) === turn?.turn);
+  for (const entry of failedAnswers.values()) {
+    if (entry.proposal.botId === bot.id && !proposals.some((proposal) => proposal.id === entry.proposal.id) && !visible.some((proposal) => proposal.id === entry.proposal.id)) visible.push(entry.proposal);
+  }
+  const cards = visible.filter((proposal) => {
+    const placement = proposalPlacement(proposal, facts?.turns);
+    return dock ? placement.kind === "dock" : placement.kind === "turn" && placement.turn === turn?.turn;
+  });
   if (cards.length === 0) return null;
-  const onFailure = (proposal, error) => setFailed((current) => ({ ...current, [proposal.id]: { proposal, error } }));
+  const onFailure = (proposal, error) => {
+    failedAnswers.set(proposal.id, { proposal, error });
+    setFailed((current) => ({ ...current, [proposal.id]: { proposal, error } }));
+  };
   const onResolved = (id) => setFailed((current) => {
+    failedAnswers.delete(id);
     if (!(id in current)) return current;
     const next = { ...current };
     delete next[id];
@@ -19061,12 +19073,18 @@ function LearningTurnTail({ turn, sessionId, useRoster, actions }) {
     { className: "bt-q-inline", key: proposal.id },
     (0, import_react46.createElement)(ProposalCard, {
       proposal,
-      initialError: failed[proposal.id]?.error,
+      initialError: failed[proposal.id]?.error ?? failedAnswers.get(proposal.id)?.error,
       onFailure,
       onResolved,
       actions
     })
   )));
+}
+function LearningTurnTail(props) {
+  return (0, import_react46.createElement)(LearningProposals, { ...props, dock: false });
+}
+function LearningDock(props) {
+  return (0, import_react46.createElement)(LearningProposals, { ...props, dock: true });
 }
 var LEARNING_CSS = `
 .bt-learning-stack{display:flex;flex-direction:column;align-items:flex-start;gap:4px}
@@ -20122,7 +20140,8 @@ function apply(ctx) {
     () => shadow("conversation.input.dock", { id: "bot-question", order: -100, inject: face }, QuestionDock),
     () => shadow("conversation.input.dock", { id: "bot-view", order: -95, inject: face }, WidgetDock),
     () => shadow("conversation.input.dock", { id: "bot-secret", order: -90, inject: face }, SecretDock),
-    () => shadow("conversation.input.dock", { id: "bot-handoff", order: -85, inject: face }, HandoffDock)
+    () => shadow("conversation.input.dock", { id: "bot-handoff", order: -85, inject: face }, HandoffDock),
+    () => shadow("conversation.input.dock", { id: "bot-learning", order: 850, priority: BOT_PRIORITY, inject: face }, LearningDock)
   ];
   ctx.effect(() => installCompiledStyles(RETURN_CSS, "return"), "ds-bot: return styles");
   shadow("sidebar.footer.action", { id: "bot-return", order: -300, inject: face }, BotReturn);

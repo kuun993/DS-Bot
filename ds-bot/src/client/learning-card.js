@@ -1,8 +1,10 @@
 import { createElement as h, useId, useRef, useState } from 'react'
 import { useTurnFacts } from './btw.js'
-import { proposalTurn } from './learning-card-model.js'
+import { proposalPlacement } from './learning-card-model.js'
 import { currentPart } from './text.js'
 import { t } from './i18n.js'
+
+const failedAnswers = new Map()
 
 function ProposalCard({ proposal, initialError = '', onFailure, onResolved, actions }) {
   const [busy, setBusy] = useState(false)
@@ -46,7 +48,7 @@ function ProposalCard({ proposal, initialError = '', onFailure, onResolved, acti
       h('button', { type: 'button', className: 'bt-q-submit', disabled: busy, onClick: () => answer(true) }, t('Approve'))))
 }
 
-export function LearningTurnTail({ turn, sessionId, useRoster, actions }) {
+function LearningProposals({ turn, dock, sessionId, useRoster, actions }) {
   const roster = useRoster(value => value)
   const facts = useTurnFacts(sessionId, actions)
   const [failed, setFailed] = useState({})
@@ -57,10 +59,21 @@ export function LearningTurnTail({ turn, sessionId, useRoster, actions }) {
   for (const entry of Object.values(failed)) {
     if (entry.proposal.botId === bot.id && !proposals.some(proposal => proposal.id === entry.proposal.id)) visible.push(entry.proposal)
   }
-  const cards = visible.filter(proposal => proposalTurn(proposal, facts?.turns) === turn?.turn)
+  for (const entry of failedAnswers.values()) {
+    if (entry.proposal.botId === bot.id && !proposals.some(proposal => proposal.id === entry.proposal.id)
+      && !visible.some(proposal => proposal.id === entry.proposal.id)) visible.push(entry.proposal)
+  }
+  const cards = visible.filter(proposal => {
+    const placement = proposalPlacement(proposal, facts?.turns)
+    return dock ? placement.kind === 'dock' : placement.kind === 'turn' && placement.turn === turn?.turn
+  })
   if (cards.length === 0) return null
-  const onFailure = (proposal, error) => setFailed(current => ({ ...current, [proposal.id]: { proposal, error } }))
+  const onFailure = (proposal, error) => {
+    failedAnswers.set(proposal.id, { proposal, error })
+    setFailed(current => ({ ...current, [proposal.id]: { proposal, error } }))
+  }
   const onResolved = id => setFailed(current => {
+    failedAnswers.delete(id)
     if (!(id in current)) return current
     const next = { ...current }
     delete next[id]
@@ -69,11 +82,19 @@ export function LearningTurnTail({ turn, sessionId, useRoster, actions }) {
   return h('div', { className: 'bt-learning-stack' }, cards.map(proposal => h('div', { className: 'bt-q-inline', key: proposal.id },
     h(ProposalCard, {
       proposal,
-      initialError: failed[proposal.id]?.error,
+      initialError: failed[proposal.id]?.error ?? failedAnswers.get(proposal.id)?.error,
       onFailure,
       onResolved,
       actions,
     }))))
+}
+
+export function LearningTurnTail(props) {
+  return h(LearningProposals, { ...props, dock: false })
+}
+
+export function LearningDock(props) {
+  return h(LearningProposals, { ...props, dock: true })
 }
 
 export const LEARNING_CSS = `
