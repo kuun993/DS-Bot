@@ -118,11 +118,12 @@ var ZH = {
   "Headers (JSON)": "请求头（JSON）",
   "Skill instructions": "技能说明",
   "New skill": "新技能",
-  "Learned from recent work": "从最近的工作中学到",
-  "Nothing is saved until you approve.": "批准后才会保存。",
+  "Awaiting approval": "等待批准",
+  Added: "新增",
+  Modified: "已修改",
+  "Show all {count} lines": "展开全部 {count} 行",
   "Skill update": "技能更新",
   "AGENTS.md update": "AGENTS.md 更新",
-  Preview: "预览",
   Approve: "批准",
   Decline: "拒绝",
   "Save changes": "保存更改",
@@ -18976,6 +18977,37 @@ function proposalPlacement(proposal, turns) {
   const turn = (before ?? latest)?.turn;
   return turn === void 0 ? { kind: "dock" } : { kind: "turn", turn };
 }
+function fileLines(text) {
+  const body = String(text ?? "").replace(/\n+$/, "");
+  return body === "" ? [] : body.split("\n");
+}
+function lineDiff(before, after) {
+  const a = fileLines(before);
+  const b = fileLines(after);
+  const keep = Array.from({ length: a.length + 1 }, () => new Array(b.length + 1).fill(0));
+  for (let i2 = a.length - 1; i2 >= 0; i2--) {
+    for (let j2 = b.length - 1; j2 >= 0; j2--) {
+      keep[i2][j2] = a[i2] === b[j2] ? keep[i2 + 1][j2 + 1] + 1 : Math.max(keep[i2 + 1][j2], keep[i2][j2 + 1]);
+    }
+  }
+  const rows2 = [];
+  let i = 0;
+  let j = 0;
+  while (i < a.length || j < b.length) {
+    if (i < a.length && j < b.length && a[i] === b[j]) {
+      rows2.push({ kind: "same", line: b[j], number: j + 1 });
+      i++;
+      j++;
+    } else if (i < a.length && (j === b.length || keep[i + 1][j] >= keep[i][j + 1])) {
+      rows2.push({ kind: "removed", line: a[i] });
+      i++;
+    } else {
+      rows2.push({ kind: "added", line: b[j], number: j + 1 });
+      j++;
+    }
+  }
+  return rows2;
+}
 
 // src/client/learning-card.js
 var import_react46 = require("react");
@@ -18999,64 +19031,106 @@ function ProposalCard({ proposal, initialError = "", onFailure, onResolved, acti
       setBusy(false);
     });
   };
-  const agents = proposal.kind === "agents";
-  const BadgeIcon = agents ? PencilIcon : MemoryIcon;
+  if (proposal.kind === "agents") {
+    const blocks = proposal.edits.map((edit) => [
+      ...fileLines(edit.old).map((line) => ({ kind: "removed", line })),
+      ...fileLines(edit.text).map((line) => ({ kind: "added", line }))
+    ]);
+    return (0, import_react46.createElement)(
+      "section",
+      { className: "bt-q bt-learning-card", role: "group", "aria-labelledby": titleId, "aria-busy": busy },
+      (0, import_react46.createElement)(ProposalHead, { titleId, icon: PencilIcon, title: t("AGENTS.md update") }),
+      (0, import_react46.createElement)(FileBox, { name: "AGENTS.md", path: proposal.folder, state: proposal.exists === false ? "Added" : "Modified", blocks }),
+      proposal.edits.map((edit, index) => edit.why ? (0, import_react46.createElement)("p", { className: "bt-learning-why", key: index }, edit.why) : null),
+      error ? (0, import_react46.createElement)("div", { className: "bt-learning-error", role: "alert" }, error) : null,
+      (0, import_react46.createElement)(ProposalFoot, { busy, answer })
+    );
+  }
+  const update = proposal.action === "update";
+  const rows2 = lineDiff(update ? proposal.previous?.content : "", proposal.content);
   return (0, import_react46.createElement)(
     "section",
     { className: "bt-q bt-learning-card", role: "group", "aria-labelledby": titleId, "aria-busy": busy },
-    (0, import_react46.createElement)(
-      "div",
-      { className: "bt-q-head" },
-      (0, import_react46.createElement)("span", { className: "bt-learning-badge", "aria-hidden": true }, (0, import_react46.createElement)(BadgeIcon)),
-      (0, import_react46.createElement)(
-        "div",
-        { className: "bt-q-text" },
-        (0, import_react46.createElement)("span", { className: "bt-learning-eyebrow" }, t("Learned from recent work")),
-        (0, import_react46.createElement)("p", { className: "bt-q-title", id: titleId }, t(agents ? "AGENTS.md update" : proposal.action === "update" ? "Skill update" : "New skill")),
-        (0, import_react46.createElement)("div", { className: "bt-q-detail" }, (0, import_react46.createElement)("code", { className: "bt-learning-tag" }, agents ? proposal.folder : proposal.name))
-      )
-    ),
-    (0, import_react46.createElement)(
-      "div",
-      { className: "bt-learning-body" },
-      agents ? proposal.edits.map((edit, index) => (0, import_react46.createElement)(
-        "div",
-        { className: "bt-learning-edit", key: `${proposal.id}-${index}` },
-        (0, import_react46.createElement)(
-          "div",
-          { className: "bt-learning-diffbox" },
-          edit.old ? edit.old.split("\n").map((line, lineIndex) => (0, import_react46.createElement)("div", {
-            className: "bt-learning-line bt-learning-removed",
-            key: `${proposal.id}-${index}-old-${lineIndex}`
-          }, (0, import_react46.createElement)("span", { className: "bt-learning-sign" }, "−"), (0, import_react46.createElement)("span", null, line))) : null,
-          edit.text ? edit.text.split("\n").map((line, lineIndex) => (0, import_react46.createElement)("div", {
-            className: "bt-learning-line bt-learning-added",
-            key: `${proposal.id}-${index}-new-${lineIndex}`
-          }, (0, import_react46.createElement)("span", { className: "bt-learning-sign" }, "+"), (0, import_react46.createElement)("span", null, line))) : null
-        ),
-        edit.why ? (0, import_react46.createElement)("p", { className: "bt-learning-why" }, edit.why) : null
-      )) : (0, import_react46.createElement)("p", { className: "bt-learning-description" }, proposal.description),
-      !agents && proposal.why ? (0, import_react46.createElement)("p", { className: "bt-learning-why" }, proposal.why) : null,
-      !agents ? (0, import_react46.createElement)(
-        "details",
-        { className: "bt-learning-preview" },
-        (0, import_react46.createElement)("summary", null, t("Preview")),
-        (0, import_react46.createElement)("pre", null, proposal.content)
-      ) : null
-    ),
+    (0, import_react46.createElement)(ProposalHead, { titleId, title: proposal.name, kind: t(update ? "Skill update" : "New skill"), detail: proposal.description }),
+    (0, import_react46.createElement)(FileBox, { name: "SKILL.md", path: `skills/${proposal.name}`, state: update ? "Updated" : "Added", blocks: [rows2] }),
+    proposal.why ? (0, import_react46.createElement)("p", { className: "bt-learning-why" }, proposal.why) : null,
     error ? (0, import_react46.createElement)("div", { className: "bt-learning-error", role: "alert" }, error) : null,
+    (0, import_react46.createElement)(ProposalFoot, { busy, answer })
+  );
+}
+function ProposalHead({ titleId, icon: icon2 = MemoryIcon, title, kind, detail }) {
+  return (0, import_react46.createElement)(
+    "div",
+    { className: "bt-q-head" },
+    (0, import_react46.createElement)("span", { className: "bt-learning-icon", "aria-hidden": true }, (0, import_react46.createElement)(icon2)),
     (0, import_react46.createElement)(
       "div",
-      { className: "bt-q-foot bt-learning-foot" },
-      (0, import_react46.createElement)("span", { className: "bt-learning-hint" }, t("Nothing is saved until you approve.")),
-      (0, import_react46.createElement)("button", { type: "button", className: "bt-learning-btn bt-learning-decline", disabled: busy, onClick: () => answer(false) }, t("Decline")),
+      { className: "bt-q-text" },
+      (0, import_react46.createElement)("p", { className: "bt-q-title", id: titleId }, title),
+      kind ? (0, import_react46.createElement)("div", { className: "bt-q-detail" }, kind) : null,
+      detail ? (0, import_react46.createElement)("p", { className: "bt-learning-description" }, detail) : null
+    ),
+    (0, import_react46.createElement)("span", { className: "bt-q-badge bt-learning-status" }, (0, import_react46.createElement)("span", { className: "bt-learning-dot", "aria-hidden": true }), t("Awaiting approval"))
+  );
+}
+function ProposalFoot({ busy, answer }) {
+  return (0, import_react46.createElement)(
+    "div",
+    { className: "bt-q-foot bt-learning-foot" },
+    (0, import_react46.createElement)("button", { type: "button", className: "bt-learning-btn bt-learning-decline", disabled: busy, onClick: () => answer(false) }, t("Decline")),
+    (0, import_react46.createElement)(
+      "button",
+      { type: "button", className: "bt-learning-btn bt-learning-approve", disabled: busy, onClick: () => answer(true) },
+      (0, import_react46.createElement)(CheckIcon),
+      t("Approve")
+    )
+  );
+}
+var COLLAPSE_ROWS = 8;
+var SIGNS = { added: "+", removed: "−", same: "" };
+function FileBox({ name, path, state, blocks }) {
+  const [open, setOpen] = (0, import_react46.useState)(false);
+  const all = blocks.flat();
+  const added = all.filter((row) => row.kind === "added").length;
+  const removed = all.filter((row) => row.kind === "removed").length;
+  const folds = all.length > COLLAPSE_ROWS;
+  const shut = folds && !open;
+  return (0, import_react46.createElement)(
+    "div",
+    { className: "bt-learning-file" },
+    (0, import_react46.createElement)(
+      "div",
+      { className: "bt-learning-filehead" },
+      (0, import_react46.createElement)("span", { className: "bt-learning-name" }, name),
+      path ? (0, import_react46.createElement)("span", { className: "bt-learning-path" }, path) : null,
+      (0, import_react46.createElement)("span", { className: "bt-learning-spacer" }),
+      added > 0 ? (0, import_react46.createElement)("span", { className: "bt-learning-plus" }, `+${added}`) : null,
+      removed > 0 ? (0, import_react46.createElement)("span", { className: "bt-learning-minus" }, `−${removed}`) : null,
+      (0, import_react46.createElement)("span", { className: `bt-learning-state bt-learning-state-${state.toLowerCase()}` }, t(state))
+    ),
+    (0, import_react46.createElement)(
+      "div",
+      { className: shut ? "bt-learning-code bt-learning-shut" : "bt-learning-code" },
+      blocks.map((rows2, blockIndex) => [
+        blockIndex > 0 ? (0, import_react46.createElement)("div", { className: "bt-learning-gap", key: `gap-${blockIndex}` }) : null,
+        ...rows2.map((row, rowIndex) => (0, import_react46.createElement)(
+          "div",
+          { className: `bt-learning-row bt-learning-${row.kind}`, key: `${blockIndex}-${rowIndex}` },
+          (0, import_react46.createElement)("span", { className: "bt-learning-num", "aria-hidden": true }, row.number ?? ""),
+          (0, import_react46.createElement)("span", { className: "bt-learning-sign", "aria-hidden": true }, SIGNS[row.kind]),
+          (0, import_react46.createElement)("span", { className: "bt-learning-text" }, row.line)
+        ))
+      ])
+    ),
+    folds ? (0, import_react46.createElement)(
+      "div",
+      { className: shut ? "bt-learning-morebar bt-learning-morebar-shut" : "bt-learning-morebar" },
       (0, import_react46.createElement)(
         "button",
-        { type: "button", className: "bt-learning-btn bt-learning-approve", disabled: busy, onClick: () => answer(true) },
-        (0, import_react46.createElement)(CheckIcon),
-        t("Approve")
+        { type: "button", className: "bt-learning-more", "aria-expanded": open, onClick: () => setOpen(!open) },
+        t(open ? "Show less" : "Show all {count} lines", { count: all.length })
       )
-    )
+    ) : null
   );
 }
 function LearningProposals({ turn, dock, sessionId, useRoster, actions }) {
@@ -19110,35 +19184,48 @@ function LearningDock(props) {
 var LEARNING_CSS = `
 .bt-learning-stack{display:flex;flex-direction:column;gap:4px}
 .bt-learning-dock{width:100%;max-width:var(--dsh-chat-content-width,748px);margin:0 auto;box-sizing:border-box}
-.bt-learning-card .bt-q-head{align-items:center;gap:12px}
-.bt-learning-badge{flex:none;display:inline-flex;align-items:center;justify-content:center;width:36px;height:36px;border-radius:10px;background:color-mix(in srgb,var(--bt-accent) 12%,transparent);color:var(--bt-accent)}
-.bt-learning-badge svg{width:18px;height:18px}
-.bt-learning-eyebrow{font-size:11px;line-height:14px;font-weight:500;letter-spacing:.02em;color:var(--bt-ink-3)}
-.bt-learning-tag{display:inline-block;margin-top:2px;padding:1px 6px;border-radius:6px;background:var(--bt-tag-bg);color:var(--bt-tag-ink);font-family:ui-monospace,monospace;font-size:12px;line-height:18px;overflow-wrap:anywhere}
-.bt-learning-body{display:flex;flex-direction:column;gap:8px}
-.bt-learning-description{margin:0;font-size:13px;line-height:18px;color:var(--bt-ink)}
-.bt-learning-why{margin:0;padding:8px 10px;border-radius:10px;background:var(--bt-hover);font-size:12px;line-height:17px;color:var(--bt-ink-2)}
-.bt-learning-preview{font-size:12px;line-height:16px;color:var(--bt-ink-2)}
-.bt-learning-preview summary{width:fit-content;cursor:pointer}
-.bt-learning-preview pre{max-height:220px;overflow:auto;margin:6px 0 0;padding:8px;border:1px solid var(--bt-line);border-radius:8px;background:var(--bt-card);color:var(--bt-ink);font-family:ui-monospace,monospace;font-size:12px;line-height:16px;white-space:pre-wrap;overflow-wrap:anywhere}
-.bt-learning-edit{display:grid;gap:4px}
-.bt-learning-diffbox{border:1px solid var(--bt-line);border-radius:10px;overflow:hidden;font-family:ui-monospace,monospace;font-size:12px;line-height:18px}
-.bt-learning-line{display:flex;gap:8px;padding:3px 10px;white-space:pre-wrap;overflow-wrap:anywhere;color:var(--bt-ink)}
-.bt-learning-removed{background:color-mix(in srgb,var(--bt-danger) 8%,transparent)}
-.bt-learning-added{background:color-mix(in srgb,var(--bt-green) 10%,transparent)}
-.bt-learning-sign{flex:none;width:10px;font-weight:600}
-.bt-learning-removed .bt-learning-sign{color:var(--bt-danger)}
+.bt-learning-card .bt-q-head{gap:12px}
+.bt-learning-icon{flex:none;display:inline-flex;align-items:center;justify-content:center;width:34px;height:34px;border-radius:10px;background:var(--bt-hover);color:var(--bt-ink-2)}
+.bt-learning-icon svg{width:18px;height:18px}
+.bt-learning-description{margin:6px 0 0;font-size:13px;line-height:19px;color:var(--bt-ink)}
+.bt-learning-status{display:inline-flex;align-items:center;gap:6px;border-style:solid;border-color:color-mix(in srgb,var(--bt-star) 35%,transparent);color:color-mix(in srgb,var(--bt-star) 80%,var(--bt-ink))}
+.bt-learning-dot{width:6px;height:6px;border-radius:50%;background:var(--bt-star)}
+.bt-learning-file{border-radius:12px;overflow:hidden;background:color-mix(in srgb,var(--bt-ink) 2.5%,var(--bt-card));box-shadow:inset 0 0 0 1px var(--bt-q-rule)}
+.bt-learning-filehead{display:flex;align-items:center;gap:8px;min-width:0;padding:8px 12px;box-shadow:inset 0 -1px 0 var(--bt-q-rule-2);font-size:12px;line-height:18px}
+.bt-learning-name{flex:none;font-weight:600;color:var(--bt-ink)}
+.bt-learning-path{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--bt-ink-3)}
+.bt-learning-spacer{flex:1}
+.bt-learning-plus,.bt-learning-minus{flex:none;font-weight:600;font-variant-numeric:tabular-nums}
+.bt-learning-plus{color:var(--bt-green)}
+.bt-learning-minus{color:var(--bt-danger)}
+.bt-learning-state{flex:none;height:20px;padding:0 8px;border-radius:999px;font-size:11px;line-height:20px;font-weight:500;background:var(--bt-hover);color:var(--bt-ink-2)}
+.bt-learning-state-added{background:color-mix(in srgb,var(--bt-green) 13%,transparent);color:color-mix(in srgb,var(--bt-green) 70%,var(--bt-ink))}
+.bt-learning-code{padding:6px 0;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;line-height:20px;color:var(--bt-ink)}
+.bt-learning-shut{max-height:172px;overflow:hidden}
+.bt-learning-row{display:grid;grid-template-columns:36px 16px 1fr}
+.bt-learning-num{padding-right:6px;text-align:right;color:var(--bt-ink-3);font-variant-numeric:tabular-nums;user-select:none}
+.bt-learning-sign{text-align:center;user-select:none}
+.bt-learning-text{min-width:0;padding-right:12px;white-space:pre-wrap;overflow-wrap:anywhere}
+.bt-learning-added{background:color-mix(in srgb,var(--bt-green) 9%,transparent)}
 .bt-learning-added .bt-learning-sign{color:var(--bt-green)}
-.bt-learning-foot{align-items:center;padding-top:12px;border-top:1px solid var(--bt-q-rule)}
-.bt-learning-hint{flex:1;min-width:0;font-size:12px;line-height:16px;color:var(--bt-ink-3)}
-.bt-learning-btn{flex:none;display:inline-flex;align-items:center;gap:6px;height:32px;padding:0 14px;border-radius:10px;font:inherit;font-size:13px;font-weight:500;cursor:pointer;transition:background-color .12s ease,opacity .12s ease,${spring(SPRING_TAP, "scale")}}
-.bt-learning-btn svg{width:14px;height:14px}
-.bt-learning-decline{background:transparent;border:1px solid var(--bt-line-2);color:var(--bt-ink)}
+.bt-learning-removed{background:color-mix(in srgb,var(--bt-danger) 7%,transparent)}
+.bt-learning-removed .bt-learning-sign{color:var(--bt-danger)}
+.bt-learning-removed .bt-learning-text{color:var(--bt-ink-2)}
+.bt-learning-gap{height:1px;margin:6px 12px;background:var(--bt-q-rule)}
+.bt-learning-morebar{display:flex;justify-content:center;padding:4px 0 8px}
+.bt-learning-morebar-shut{position:relative;margin-top:-36px;padding-top:28px;background:linear-gradient(transparent,color-mix(in srgb,var(--bt-ink) 2.5%,var(--bt-card)) 60%)}
+.bt-learning-more{height:24px;padding:0 10px;border:0;border-radius:999px;background:var(--bt-card);box-shadow:inset 0 0 0 1px var(--bt-q-edge);font:inherit;font-size:12px;color:var(--bt-ink-2);cursor:pointer;transition:background-color .12s ease,color .12s ease}
+.bt-learning-more:hover{background:var(--bt-hover);color:var(--bt-ink)}
+.bt-learning-more:focus-visible{outline:2px solid var(--bt-accent);outline-offset:2px}
+.bt-learning-why{margin:0;font-size:12px;line-height:17px;color:var(--bt-ink-2)}
+.bt-learning-btn{flex:none;display:inline-flex;align-items:center;gap:6px;height:34px;padding:0 16px;border:0;border-radius:999px;font:inherit;font-size:14px;font-weight:500;cursor:pointer;transition:background-color .12s ease,opacity .12s ease,${spring(SPRING_TAP, "scale")}}
+.bt-learning-btn svg{width:15px;height:15px}
+.bt-learning-decline{background:transparent;box-shadow:inset 0 0 0 1px var(--bt-line-2);color:var(--bt-ink)}
 .bt-learning-decline:hover:not(:disabled){background:var(--bt-hover)}
-.bt-learning-approve{border:1px solid transparent;background:var(--bt-ink);color:var(--bt-card)}
-.bt-learning-approve:hover:not(:disabled){opacity:.88}
+.bt-learning-approve{padding-left:13px;background:var(--bt-accent);color:var(--bt-accent-ink,#fff)}
+.bt-learning-approve:hover:not(:disabled){opacity:.86}
 .bt-learning-btn:disabled{opacity:.45;cursor:default}
-.bt-learning-btn:active:not(:disabled){scale:.97}
+.bt-learning-btn:active:not(:disabled){scale:.96}
 .bt-learning-btn:focus-visible{outline:2px solid var(--bt-accent);outline-offset:2px}
 @media (prefers-reduced-motion:reduce){.bt-learning-btn{transition:background-color .12s ease,opacity .12s ease}.bt-learning-btn:active:not(:disabled){scale:none}}
 .bt-learning-error{font-size:12px;line-height:16px;color:var(--bt-danger)}
