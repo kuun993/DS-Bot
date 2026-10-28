@@ -3,7 +3,7 @@ import { useTurnFacts } from './btw.js'
 import { proposalPlacement } from './learning-card-model.js'
 import { currentPart } from './text.js'
 import { t } from './i18n.js'
-import { CheckIcon, MemoryIcon } from './icons.js'
+import { CheckIcon, MemoryIcon, PencilIcon } from './icons.js'
 
 const failedAnswers = new Map()
 
@@ -29,17 +29,25 @@ function ProposalCard({ proposal, initialError = '', onFailure, onResolved, acti
       })
   }
   const agents = proposal.kind === 'agents'
+  const BadgeIcon = agents ? PencilIcon : MemoryIcon
   return h('section', { className: 'bt-q bt-learning-card', role: 'group', 'aria-labelledby': titleId, 'aria-busy': busy },
     h('div', { className: 'bt-q-head' },
-      h('span', { className: 'bt-learning-badge', 'aria-hidden': true }, h(MemoryIcon)),
+      h('span', { className: 'bt-learning-badge', 'aria-hidden': true }, h(BadgeIcon)),
       h('div', { className: 'bt-q-text' },
         h('span', { className: 'bt-learning-eyebrow' }, t('Learned from recent work')),
         h('p', { className: 'bt-q-title', id: titleId }, t(agents ? 'AGENTS.md update' : proposal.action === 'update' ? 'Skill update' : 'New skill')),
         h('div', { className: 'bt-q-detail' }, h('code', { className: 'bt-learning-tag' }, agents ? proposal.folder : proposal.name)))),
     h('div', { className: 'bt-learning-body' },
       agents ? proposal.edits.map((edit, index) => h('div', { className: 'bt-learning-edit', key: `${proposal.id}-${index}` },
-        edit.old ? h('pre', { className: 'bt-learning-diff bt-learning-removed' }, edit.old.split('\n').map(line => `- ${line}`).join('\n')) : null,
-        edit.text ? h('pre', { className: 'bt-learning-diff bt-learning-added' }, edit.text.split('\n').map(line => `+ ${line}`).join('\n')) : null,
+        h('div', { className: 'bt-learning-diffbox' },
+          edit.old ? edit.old.split('\n').map((line, lineIndex) => h('div', {
+            className: 'bt-learning-line bt-learning-removed',
+            key: `${proposal.id}-${index}-old-${lineIndex}`,
+          }, h('span', { className: 'bt-learning-sign' }, '−'), h('span', null, line))) : null,
+          edit.text ? edit.text.split('\n').map((line, lineIndex) => h('div', {
+            className: 'bt-learning-line bt-learning-added',
+            key: `${proposal.id}-${index}-new-${lineIndex}`,
+          }, h('span', { className: 'bt-learning-sign' }, '+'), h('span', null, line))) : null),
         edit.why ? h('p', { className: 'bt-learning-why' }, edit.why) : null)) : h('p', { className: 'bt-learning-description' }, proposal.description),
       !agents && proposal.why ? h('p', { className: 'bt-learning-why' }, proposal.why) : null,
       !agents ? h('details', { className: 'bt-learning-preview' },
@@ -116,9 +124,13 @@ export const LEARNING_CSS = `
 .bt-learning-preview summary{width:fit-content;cursor:pointer}
 .bt-learning-preview pre{max-height:220px;overflow:auto;margin:6px 0 0;padding:8px;border:1px solid var(--bt-line);border-radius:8px;background:var(--bt-card);color:var(--bt-ink);font-family:ui-monospace,monospace;font-size:12px;line-height:16px;white-space:pre-wrap;overflow-wrap:anywhere}
 .bt-learning-edit{display:grid;gap:4px}
-.bt-learning-diff{margin:0;font-family:ui-monospace,monospace;font-size:12px;line-height:16px;white-space:pre-wrap;overflow-wrap:anywhere}
-.bt-learning-removed{color:var(--bt-ink-2);text-decoration:line-through}
-.bt-learning-added{color:var(--bt-ink)}
+.bt-learning-diffbox{border:1px solid var(--bt-line);border-radius:10px;overflow:hidden;font-family:ui-monospace,monospace;font-size:12px;line-height:18px}
+.bt-learning-line{display:flex;gap:8px;padding:3px 10px;white-space:pre-wrap;overflow-wrap:anywhere;color:var(--bt-ink)}
+.bt-learning-removed{background:color-mix(in srgb,var(--bt-danger) 8%,transparent)}
+.bt-learning-added{background:color-mix(in srgb,var(--bt-green) 10%,transparent)}
+.bt-learning-sign{flex:none;width:10px;font-weight:600}
+.bt-learning-removed .bt-learning-sign{color:var(--bt-danger)}
+.bt-learning-added .bt-learning-sign{color:var(--bt-green)}
 .bt-learning-foot{align-items:center;padding-top:12px;border-top:1px solid var(--bt-q-rule)}
 .bt-learning-hint{flex:1;min-width:0;font-size:12px;line-height:16px;color:var(--bt-ink-3)}
 .bt-learning-btn{flex:none;display:inline-flex;align-items:center;gap:6px;height:32px;padding:0 14px;border-radius:10px;font:inherit;font-size:13px;font-weight:500;cursor:pointer;transition:background-color .12s ease,opacity .12s ease,scale .12s ease}

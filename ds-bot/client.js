@@ -19000,13 +19000,14 @@ function ProposalCard({ proposal, initialError = "", onFailure, onResolved, acti
     });
   };
   const agents = proposal.kind === "agents";
+  const BadgeIcon = agents ? PencilIcon : MemoryIcon;
   return (0, import_react46.createElement)(
     "section",
     { className: "bt-q bt-learning-card", role: "group", "aria-labelledby": titleId, "aria-busy": busy },
     (0, import_react46.createElement)(
       "div",
       { className: "bt-q-head" },
-      (0, import_react46.createElement)("span", { className: "bt-learning-badge", "aria-hidden": true }, (0, import_react46.createElement)(MemoryIcon)),
+      (0, import_react46.createElement)("span", { className: "bt-learning-badge", "aria-hidden": true }, (0, import_react46.createElement)(BadgeIcon)),
       (0, import_react46.createElement)(
         "div",
         { className: "bt-q-text" },
@@ -19021,8 +19022,18 @@ function ProposalCard({ proposal, initialError = "", onFailure, onResolved, acti
       agents ? proposal.edits.map((edit, index) => (0, import_react46.createElement)(
         "div",
         { className: "bt-learning-edit", key: `${proposal.id}-${index}` },
-        edit.old ? (0, import_react46.createElement)("pre", { className: "bt-learning-diff bt-learning-removed" }, edit.old.split("\n").map((line) => `- ${line}`).join("\n")) : null,
-        edit.text ? (0, import_react46.createElement)("pre", { className: "bt-learning-diff bt-learning-added" }, edit.text.split("\n").map((line) => `+ ${line}`).join("\n")) : null,
+        (0, import_react46.createElement)(
+          "div",
+          { className: "bt-learning-diffbox" },
+          edit.old ? edit.old.split("\n").map((line, lineIndex) => (0, import_react46.createElement)("div", {
+            className: "bt-learning-line bt-learning-removed",
+            key: `${proposal.id}-${index}-old-${lineIndex}`
+          }, (0, import_react46.createElement)("span", { className: "bt-learning-sign" }, "−"), (0, import_react46.createElement)("span", null, line))) : null,
+          edit.text ? edit.text.split("\n").map((line, lineIndex) => (0, import_react46.createElement)("div", {
+            className: "bt-learning-line bt-learning-added",
+            key: `${proposal.id}-${index}-new-${lineIndex}`
+          }, (0, import_react46.createElement)("span", { className: "bt-learning-sign" }, "+"), (0, import_react46.createElement)("span", null, line))) : null
+        ),
         edit.why ? (0, import_react46.createElement)("p", { className: "bt-learning-why" }, edit.why) : null
       )) : (0, import_react46.createElement)("p", { className: "bt-learning-description" }, proposal.description),
       !agents && proposal.why ? (0, import_react46.createElement)("p", { className: "bt-learning-why" }, proposal.why) : null,
@@ -19110,9 +19121,13 @@ var LEARNING_CSS = `
 .bt-learning-preview summary{width:fit-content;cursor:pointer}
 .bt-learning-preview pre{max-height:220px;overflow:auto;margin:6px 0 0;padding:8px;border:1px solid var(--bt-line);border-radius:8px;background:var(--bt-card);color:var(--bt-ink);font-family:ui-monospace,monospace;font-size:12px;line-height:16px;white-space:pre-wrap;overflow-wrap:anywhere}
 .bt-learning-edit{display:grid;gap:4px}
-.bt-learning-diff{margin:0;font-family:ui-monospace,monospace;font-size:12px;line-height:16px;white-space:pre-wrap;overflow-wrap:anywhere}
-.bt-learning-removed{color:var(--bt-ink-2);text-decoration:line-through}
-.bt-learning-added{color:var(--bt-ink)}
+.bt-learning-diffbox{border:1px solid var(--bt-line);border-radius:10px;overflow:hidden;font-family:ui-monospace,monospace;font-size:12px;line-height:18px}
+.bt-learning-line{display:flex;gap:8px;padding:3px 10px;white-space:pre-wrap;overflow-wrap:anywhere;color:var(--bt-ink)}
+.bt-learning-removed{background:color-mix(in srgb,var(--bt-danger) 8%,transparent)}
+.bt-learning-added{background:color-mix(in srgb,var(--bt-green) 10%,transparent)}
+.bt-learning-sign{flex:none;width:10px;font-weight:600}
+.bt-learning-removed .bt-learning-sign{color:var(--bt-danger)}
+.bt-learning-added .bt-learning-sign{color:var(--bt-green)}
 .bt-learning-foot{align-items:center;padding-top:12px;border-top:1px solid var(--bt-q-rule)}
 .bt-learning-hint{flex:1;min-width:0;font-size:12px;line-height:16px;color:var(--bt-ink-3)}
 .bt-learning-btn{flex:none;display:inline-flex;align-items:center;gap:6px;height:32px;padding:0 14px;border-radius:10px;font:inherit;font-size:13px;font-weight:500;cursor:pointer;transition:background-color .12s ease,opacity .12s ease,scale .12s ease}
