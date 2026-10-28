@@ -17,6 +17,15 @@ export function install(rt) {
   ctx.on?.('llm/adapters-updated', () => { catalogCache = { at: 0, value: [] }; reasoningCache.clear() })
   for (const name of ['credentials/reference-updated', 'settings/document-updated']) ctx.on?.(name, () => { catalogCache = { at: 0, value: [] } })
 
+  // A route a request was refused on as "not a model endpoint". DSH serves such a route
+  // through its catalog — its own availability check asks the provider for it — while the
+  // adapter behind it refuses every request: a hosted loop engine's placeholder is the
+  // one that exists today. No Bot can be answered on one, so every choice is made from a
+  // catalog this set has already been applied to.
+  const NOT_ENDPOINT_CODES = new Set(['HOSTED_ENGINE_ROUTE'])
+  const notEndpoints = new Set()
+  const dropCatalog = () => { catalogCache = { at: 0, value: [] } }
+
   // The thinking levels a model serves: `{efforts: [{id, name, description?}],
   // defaultEffort?}`, or undefined when it has none or the provider cannot say.
   async function reasoningOf(ref) {
@@ -56,19 +65,24 @@ export function install(rt) {
     // turn on them fails.
     const missing = await rt.missingKeys?.([...new Set(entries.map(entry => entry.provider))]) ?? new Set()
     for (const entry of entries) if (missing.has(entry.provider)) entry.needsKey = true
+    const served = entries.filter(entry => !notEndpoints.has(entry.ref))
     const used = new Set(Object.values(state.bots ?? {}).flatMap(bot => [bot.model, bot.appliedModel].filter(Boolean)))
-    await Promise.all(entries.filter(entry => used.has(entry.ref)).map(async (entry) => {
+    await Promise.all(served.filter(entry => used.has(entry.ref)).map(async (entry) => {
       const reasoning = await reasoningOf(entry.ref)
       if (reasoning !== undefined) entry.reasoning = reasoning
     }))
-    catalogCache = { at: Date.now(), value: entries }
-    return entries
+    catalogCache = { at: Date.now(), value: served }
+    return served
   }
 
-  // The profile default model of DSH as set, served or not.
+  // The profile default model of DSH as set, served or not. A default naming a route this
+  // run was refused on is not one a Bot may be put on, so it names nothing here and
+  // `pickDefault` falls back to a served model.
   const defaultRef = () => {
     const selection = ctx.get?.('agentDefaultModel')?.currentSelection?.()
-    return selection?.provider && selection?.model ? `${selection.provider}/${selection.model}` : undefined
+    if (!selection?.provider || !selection?.model) return undefined
+    const ref = `${selection.provider}/${selection.model}`
+    return notEndpoints.has(ref) ? undefined : ref
   }
   // The profile default model of DSH, when it is served; else the first served model.
   function pickDefault(entries) {
@@ -177,6 +191,44 @@ export function install(rt) {
     return ref
   }
 
+  // A request was refused because the route it selected is not a model endpoint: drop
+  // that route from every choice, move the Bots that named it to the model they would be
+  // given today, and re-select for the Bot whose turn failed. The re-selection is what
+  // repairs the Session that failed: a group's selection can have been written from
+  // another Bot's record, so the Bot speaking on it may name nothing wrong itself. The
+  // turn that failed already reported the refusal; the next one is the one that recovers.
+  async function noteRefusedRoute(error, session, bot) {
+    const code = error?.code
+    if (typeof code !== 'string' || !NOT_ENDPOINT_CODES.has(code)) return undefined
+    let config
+    try { config = session?.requestHeader?.()?.config } catch { config = undefined }
+    if (typeof config?.provider !== 'string' || typeof config?.model !== 'string') return undefined
+    const ref = `${config.provider}/${config.model}`
+    if (!notEndpoints.has(ref)) {
+      notEndpoints.add(ref)
+      dropCatalog()
+      rt.warn('ds-bot: the model route %s refused the request as not a model endpoint (%s); no Bot is put on it again', ref, code)
+    }
+    let repaired = false
+    let replacement
+    for (const other of Object.values(state.bots ?? {})) {
+      if (other.model !== ref && other.appliedModel !== ref) continue
+      // A Bot that named the route moves to the model it would be given today, not to
+      // no model at all: a record naming nothing leaves it waiting for the user.
+      replacement ??= pickDefault(await catalog())
+      delete other.appliedModel
+      delete other.appliedEffort
+      if (replacement === undefined) delete other.model
+      else other.model = replacement
+      repaired = true
+    }
+    if (repaired) await rt.save()
+    // Forced: the Bot's own model is usually a real one already, and the Session that
+    // failed was moved by another Bot's record. Re-selecting is what moves it back.
+    if (bot !== undefined) await applyModel(bot, { force: true })
+    return ref
+  }
+
   // A provider may register after the plugin starts; a greeting waits for its Bot's
   // model instead of failing with "no adapter registered".
   async function waitForModel(bot, ms = ROUTE_WAIT_MS) {
@@ -211,7 +263,7 @@ export function install(rt) {
   Object.assign(rt, {
     catalog, cachedCatalog: () => catalogCache.value, cachedDefault: () => pickDefault(catalogCache.value),
     defaultRef, defaultModel, defaultEffort, resolveModel, desiredModel, reasoningOf, resolveEffort, desiredEffort,
-    selectSessionModel, applyModel, waitForModel, syncModels,
-    dropCatalog: () => { catalogCache = { at: 0, value: [] } },
+    selectSessionModel, applyModel, waitForModel, syncModels, noteRefusedRoute,
+    dropCatalog,
   })
 }

@@ -350,14 +350,19 @@ export function install(rt) {
     const room = rt.roomOf(rt.groupOwners.get(id)?.roomId) ?? rt.roomOf(id)
     return room ? `group "${room.name}"` : 'own chat'
   }
-  const noteTurnFailure = (id, failure) => {
+  const noteTurnFailure = (id, failure, session) => {
+    const bot = rt.botOf(rt.selfOf(id))
+    // A route that is not a model endpoint is dropped here, once: the Bot whose turn
+    // failed moves to a model that can answer, and the route is never chosen again.
+    Promise.resolve(rt.noteRefusedRoute?.(failure, session, bot))
+      .catch(error => rt.warn('ds-bot: dropping a refused model route failed: %s', error))
     rt.noteFailure({
       source: 'turn',
       text: failure.message || 'the model call failed',
       code: failure.code,
       status: failure.status,
       requestId: failure.requestId,
-      bot: rt.botOf(rt.selfOf(id))?.name ?? (rt.roomOf(id) ? undefined : 'unknown Bot'),
+      bot: bot?.name ?? (rt.roomOf(id) ? undefined : 'unknown Bot'),
       where: placeOf(id),
       sessionId: id,
     })
@@ -576,7 +581,7 @@ export function install(rt) {
         }
         const reason = event.data?.reason
         const failure = reason?.kind === 'error' && !switched ? turnFailure(reason.error) : undefined
-        if (failure !== undefined) noteTurnFailure(id, failure)
+        if (failure !== undefined) noteTurnFailure(id, failure, session)
         const held = rt.groupOwners.has(id) ? rt.takeRoomSteps?.(id) ?? '' : ''
         if (switched) break
         // A model that writes its tool call as text ends the turn as if it were done,

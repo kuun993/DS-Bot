@@ -186,3 +186,39 @@ test('a Bot on the default model with its own thinking level leaves the default 
   await rt.applyModel({ id: 'b1', model: 'deepseek/v4-flash', effort: 'low' })
   assert.deepEqual(current(), fallback)
 })
+
+test('a route refused as not a model endpoint is dropped, and every Bot leaves it', async () => {
+  const { rt, selected } = bench({
+    providers: { external: ['default'], deepseek: ['v4-flash'], stepfun: ['step-5'] },
+    fallback: { provider: 'external', model: 'default' },
+  })
+  const owner = { id: 'b1', model: 'external/default', appliedModel: 'external/default' }
+  // A Bot that names nothing wrong can still speak on a group Session the route was
+  // written into, so the Bot whose turn failed is not always the one that holds it.
+  const speaker = { id: 'b2', model: 'stepfun/step-5', appliedModel: 'stepfun/step-5' }
+  rt.state.bots.b1 = owner
+  rt.state.bots.b2 = speaker
+  const session = { requestHeader: () => ({ config: { provider: 'external', model: 'default' } }) }
+
+  // Until a request is refused, nothing can tell the route from a model: it is served,
+  // and the DSH default names it.
+  assert.equal(await rt.desiredModel(owner), 'external/default')
+  assert.equal(await rt.defaultModel(), 'external/default')
+
+  assert.equal(await rt.noteRefusedRoute({ code: 'HOSTED_ENGINE_ROUTE' }, session, speaker), 'external/default')
+  assert.equal((await rt.catalog()).some(entry => entry.ref === 'external/default'), false)
+  // The DSH default still names it, so the fallback is a served model rather than that.
+  assert.equal(await rt.defaultModel(), 'deepseek/v4-flash')
+  assert.equal(owner.model, 'deepseek/v4-flash')
+  // Nothing is applied for it yet, so its next turn selects the real model.
+  assert.equal(owner.appliedModel, undefined)
+  // The speaking Bot is re-selected, so the Session the refusal came from is repaired.
+  assert.deepEqual(selected, ['b2:stepfun/step-5'])
+  assert.equal(await rt.applyModel(owner), 'deepseek/v4-flash')
+  assert.deepEqual(selected, ['b2:stepfun/step-5', 'b1:deepseek/v4-flash'])
+
+  // Only a route refusal is learned: any other failure keeps its route.
+  assert.equal(await rt.noteRefusedRoute({ code: 'RATE_LIMIT' }, session, speaker), undefined)
+  assert.equal(await rt.noteRefusedRoute({}, session, speaker), undefined)
+  assert.equal(await rt.noteRefusedRoute({ code: 'HOSTED_ENGINE_ROUTE' }, {}, speaker), undefined)
+})
